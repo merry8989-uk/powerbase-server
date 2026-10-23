@@ -4,6 +4,42 @@ All notable changes to Powerbase. The version lives in `powerbase/version.py`
 and is read from there by the build, by `/healthz`, and by the dashboard — one
 source of truth, so the metadata and the running server cannot disagree.
 
+## 1.7.0
+
+The read path, measured. `scripts/querybench.py` is new and immediately found
+two real problems.
+
+### Fixed
+- **Deep pagination was about seven times more expensive than it should be.**
+  The keyset cursor was written as
+  `event_time < ? OR (event_time = ? AND id < ?)`. The equivalent row-value
+  comparison `(event_time, id) < (?, ?)` means the same thing and plans
+  completely differently: as an OR, SQLite chose `MULTI-INDEX OR` and had to
+  sort everything after the cursor before the LIMIT could apply. On 60,000 rows
+  page 1 cost 32 ms and every page after it 120-170 ms, growing with the table.
+  It is now a single index seek: pages sit at 16-28 ms and the cost no longer
+  grows with depth (5.4x growth to 1.4x).
+- **Every explorer query was paying for a sort.** The time-ordered indexes were
+  declared `(app_id, event_time DESC)` while the query orders by
+  `event_time DESC, id DESC`, so the planner could not satisfy the ordering from
+  the index and reported `USE TEMP B-TREE FOR RIGHT PART OF ORDER BY` on all
+  five scenarios. Migration 0010 declares `id DESC` as the last index column and
+  the sort step is gone. (The wall-clock benefit of this one is not
+  demonstrable at the sizes tested — the sort was not the bottleneck there — so
+  the claim is about the plan, which is provable, and not about a speedup.)
+
+### Added
+- **`scripts/querybench.py`** — seeds a table of a realistic size, times five
+  scenarios (default, wide, filtered, narrow, free text), walks keyset
+  pagination to depth, and prints `EXPLAIN QUERY PLAN` for each. `--compare`
+  measures the pre-0010 index shapes side by side. `--quick` runs in CI.
+- Three tests that assert the **plan** rather than a timing, because a timing
+  test would pass on a fast machine with the bug still in place.
+
+### Notes
+- Free-text search (`q=`) remains a `LIKE` scan no index can serve — 21-36 ms on
+  60,000 rows. Documented rather than fixed.
+
 ## 1.6.0
 
 A bound on the housekeeping tables.

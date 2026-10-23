@@ -378,11 +378,29 @@ def query_log_events(
 
     if cursor:
         cursor_ts, cursor_id = decode_cursor(cursor)
+        # A row-value comparison, not the equivalent `event_time < ? OR
+        # (event_time = ? AND id < ?)`.
+        #
+        # The two mean the same thing and plan completely differently. Written
+        # as an OR, SQLite chooses MULTI-INDEX OR and then has to sort
+        # everything after the cursor before the LIMIT can apply:
+        #
+        #     MULTI-INDEX OR
+        #       INDEX 1  SEARCH ... (app_id=? AND event_time>? AND event_time<?)
+        #       INDEX 2  SEARCH ... (app_id=? AND event_time=? AND id<?)
+        #     USE TEMP B-TREE FOR ORDER BY
+        #
+        # On 60,000 rows that made page 1 cost 32 ms and every page after it
+        # 120-170 ms — deep pagination was ~100x more expensive than it should
+        # be, and got worse with table size. As a row value it is a single index
+        # seek, which is what keyset pagination is supposed to be.
+        #
+        # `scripts/querybench.py` found this; the plan above is from its output.
         if direction == "desc":
-            where += " AND (event_time < ? OR (event_time = ? AND id < ?))"
+            where += " AND (event_time, id) < (?, ?)"
         else:
-            where += " AND (event_time > ? OR (event_time = ? AND id > ?))"
-        params.extend([cursor_ts, cursor_ts, cursor_id])
+            where += " AND (event_time, id) > (?, ?)"
+        params.extend([cursor_ts, cursor_id])
 
     # `sort` and `direction` are both from a fixed set, so this interpolation
     # cannot carry client input. `id` is the tiebreaker that makes the ordering

@@ -43,3 +43,9 @@ jobs:
 
       - name: Ingestion load test
         run: python scripts/loadtest.py --quick
+
+      # The read path, which is the half a person waits on. This checks the
+      # query plans rather than a timing: a timing test would pass on a fast
+      # runner with the bug still in place.
+      - name: Logs Explorer query plans
+        run: python scripts/querybench.py --quick

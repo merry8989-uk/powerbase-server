@@ -289,3 +289,64 @@ def test_sort_accepts_the_specification_field_names(field, expected):
 def test_sort_defaults_to_newest_first_with_a_stable_tie_break():
     assert parse_sort(None) == ("event_time", "desc")
     assert parse_sort({}) == ("event_time", "desc")
+
+
+# ------------------------------------------------------- the cursor's query plan
+def test_the_cursor_clause_is_a_row_value_comparison(qenv):
+    """Guards the shape of the pagination clause, not just its behaviour.
+
+    The equivalent `event_time < ? OR (event_time = ? AND id < ?)` makes SQLite
+    choose MULTI-INDEX OR and then sort everything after the cursor before the
+    LIMIT can apply. On 60,000 rows that cost 120-170 ms per page instead of
+    ~20 ms, and it grew with the table. This test fails if anyone rewrites it
+    back into an OR, whatever the timings look like on the machine running it.
+    """
+    from powerbase import logquery
+
+    where, params = logquery.build_where(
+        app_id=APP_ID, since=None, until=None, filters=[], q=None
+    )
+    where += " AND (event_time, id) < (?, ?)"
+    sql = (
+        f"SELECT * FROM log_events WHERE {where} "
+        "ORDER BY event_time DESC, id DESC LIMIT ?"
+    )
+    plan = " | ".join(
+        str(row["detail"])
+        for row in qenv.db.query("EXPLAIN QUERY PLAN " + sql, tuple(params) + ("x", 1, 51))
+    )
+    assert "TEMP B-TREE" not in plan, f"the cursor query sorts: {plan}"
+    assert "MULTI-INDEX OR" not in plan, f"the cursor query merges index scans: {plan}"
+    assert "idx_log_events_app_time" in plan, f"not using the time index: {plan}"
+
+
+def test_the_ordered_index_carries_the_tiebreaker(qenv):
+    """`ORDER BY event_time DESC, id DESC` needs `id` in the index, or every
+    query pays for a temp B-tree. Migration 0010 is what added it."""
+    sql = qenv.db.one(
+        "SELECT sql FROM sqlite_master WHERE type = 'index' AND name = 'idx_log_events_app_time'"
+    )["sql"]
+    assert "id DESC" in sql, f"the index lost its tiebreaker: {sql}"
+
+
+def test_pagination_stays_flat_to_depth(qenv):
+    """Ten pages in, a page costs about what the first page cost."""
+    import time
+
+    from powerbase import logquery
+
+    timings = []
+    cursor = None
+    for _ in range(10):
+        began = time.monotonic()
+        page = logquery.query_log_events(
+            qenv.db, app_id=APP_ID, limit=1, cursor=cursor
+        )
+        timings.append((time.monotonic() - began) * 1000)
+        cursor = page.next_cursor
+        if cursor is None:
+            break
+    assert len(timings) > 1
+    # A generous bound: the point is to catch an OFFSET-shaped regression or a
+    # reintroduced sort, not to measure the machine.
+    assert max(timings) < 50, f"a page got expensive: {timings}"
