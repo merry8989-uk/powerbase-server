@@ -49,3 +49,155 @@ jobs:
       # runner with the bug still in place.
       - name: Logs Explorer query plans
         run: python scripts/querybench.py --quick
+
+  # The Dockerfile and the compose file were written and never built — the
+  # development sandbox has no Docker. A missing COPY or a wrong base image
+  # would have been found by the first self-hoster to try it. This is that
+  # verification, moved to somewhere that can actually run it.
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build the image
+        run: docker build -t powerbase:ci .
+
+      - name: Boot it
+        run: |
+          docker run -d --name powerbase-ci -p 8080:8080 -v powerbase-ci-data:/data powerbase:ci
+          for _ in $(seq 1 60); do
+            curl -fsS http://127.0.0.1:8080/healthz >/dev/null 2>&1 && break
+            sleep 1
+          done
+          curl -fsS http://127.0.0.1:8080/healthz
+          echo
+          curl -fsS http://127.0.0.1:8080/v1/status/version
+          echo
+
+      - name: The version in the image matches the source
+        run: |
+          want="$(python3 -c "import re;print(re.search(r'__version__ = \"([^\"]+)\"', open('powerbase/version.py').read()).group(1))")"
+          got="$(curl -fsS http://127.0.0.1:8080/v1/status/version | python3 -c 'import json,sys;print(json.load(sys.stdin)["version"])')"
+          echo "source=$want  image=$got"
+          test "$want" = "$got"
+
+      - name: The container reports itself healthy
+        run: |
+          for _ in $(seq 1 60); do
+            state="$(docker inspect -f '{{.State.Health.Status}}' powerbase-ci)"
+            [ "$state" = "healthy" ] && break
+            sleep 2
+          done
+          echo "health: $state"
+          test "$state" = "healthy"
+
+      - name: The schema was created on boot
+        run: |
+          # create_app() runs migrations, so a fresh volume should already have
+          # the full schema. If this fails, the image starts empty and every
+          # request 500s.
+          tables="$(docker exec powerbase-ci python -c "
+          from powerbase.db import Database
+          from powerbase.config import Settings
+          db = Database(Settings.from_env().db_path)
+          print(len(db.query(\"SELECT name FROM sqlite_master WHERE type='table'\")))
+          ")"
+          echo "tables in the container: $tables"
+          test "$tables" -gt 20
+
+      - name: Logs on failure
+        if: failure()
+        run: docker logs powerbase-ci
+
+      - name: Tear down
+        if: always()
+        run: docker rm -f powerbase-ci || true
+
+  # install.sh needs root, systemd and apt, none of which the development
+  # sandbox has, so it had only ever been `bash -n` syntax-checked. This runs it
+  # in dry-run mode and checks the files it renders. It does not prove a real
+  # install works — that needs a real host — and it says so.
+  install-script:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: shellcheck
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq shellcheck
+          shellcheck scripts/install.sh
+
+      - name: Dry run, with a domain
+        run: |
+          POWERBASE_INSTALL_DEST="$PWD/dryrun-domain" \
+            bash scripts/install.sh --dry-run logs.example.com com.acme.shop "Acme Shop" web
+
+      - name: Dry run, without a domain
+        run: |
+          POWERBASE_INSTALL_DEST="$PWD/dryrun-plain" \
+            bash scripts/install.sh --dry-run
+
+      - name: It rendered every artefact
+        run: |
+          set -e
+          for f in etc/systemd/system/powerbase.service \
+                   etc/powerbase/powerbase.env \
+                   etc/powerbase/admin-password \
+                   etc/caddy/Caddyfile \
+                   usr/local/bin/powerbase; do
+            test -f "dryrun-domain/$f" || { echo "missing: $f"; exit 1; }
+            echo "  rendered: $f"
+          done
+
+      - name: The rendered content is what it should be
+        run: |
+          set -e
+          unit=dryrun-domain/etc/systemd/system/powerbase.service
+          env=dryrun-domain/etc/powerbase/powerbase.env
+
+          grep -qx 'ExecStart=/opt/powerbase/.venv/bin/python /opt/powerbase/run.py' "$unit"
+          grep -qx 'EnvironmentFile=/etc/powerbase/powerbase.env' "$unit"
+          grep -qx 'User=powerbase' "$unit"
+          grep -qx 'NoNewPrivileges=true' "$unit"
+          grep -qx 'ProtectSystem=strict' "$unit"
+          grep -qx 'ReadWritePaths=/var/lib/powerbase' "$unit"
+          echo "  the unit is as written"
+
+          grep -qx 'POWERBASE_DB=/var/lib/powerbase/powerbase.db' "$env"
+          grep -qx 'POWERBASE_BACKUP_DIR=/var/lib/powerbase/backups' "$env"
+          echo "  the environment file is as written"
+
+          # The bind address depends on whether Caddy is in front: loopback when
+          # it is, all interfaces when it is not. That branch is worth asserting
+          # because getting it wrong either exposes the server or hides it.
+          grep -qx 'POWERBASE_HOST=127.0.0.1' "$env"
+          grep -qx 'POWERBASE_HOST=0.0.0.0' dryrun-plain/etc/powerbase/powerbase.env
+          echo "  the bind address follows the domain argument"
+
+          # The wrapper must run the instance's own interpreter and config, not
+          # whatever python3 is first on PATH.
+          grep -q '/opt/powerbase/.venv/bin/python /opt/powerbase/scripts/powerbase' \
+            dryrun-domain/usr/local/bin/powerbase
+          echo "  the CLI wrapper is as written"
+
+          # A generated admin password, not a placeholder.
+          pw="$(cat dryrun-domain/etc/powerbase/admin-password)"
+          test "${#pw}" -ge 32
+          echo "  an admin password was generated (${#pw} chars)"
+
+      - name: The unit file is valid to systemd
+        run: |
+          set -e
+          # ExecStart and the paths point at the real filesystem, which does not
+          # exist on a runner. Rewriting them to something that does lets
+          # systemd-analyze check the syntax and every hardening directive,
+          # which is the part that can be wrong in a way nothing else catches.
+          sed -e 's|^ExecStart=.*|ExecStart=/bin/true|' \
+              -e 's|^EnvironmentFile=.*|# no environment file|' \
+              -e 's|^Documentation=.*|# no documentation|' \
+              -e 's|^WorkingDirectory=.*|WorkingDirectory=/tmp|' \
+              -e 's|^ReadWritePaths=.*|ReadWritePaths=/tmp|' \
+            dryrun-domain/etc/systemd/system/powerbase.service > /tmp/powerbase-check.service
+          systemd-analyze verify /tmp/powerbase-check.service
+          echo "  systemd-analyze accepts the unit"
