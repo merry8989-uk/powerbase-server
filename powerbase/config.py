@@ -89,6 +89,12 @@ class Settings:
     # per-project retention above, because these are not observability data
     # and are not folded into any rollup.
     operational_retention_days: int = 30
+
+    # How many processes serve this instance. This build expects one, and
+    # `powerbase/deployment.py` explains what goes wrong when it is not.
+    # Read from POWERBASE_WORKERS, then WEB_CONCURRENCY (what uvicorn and
+    # gunicorn set), then 1.
+    workers: int = 1
     vacuum_after_prune: bool = True
 
     # Alerts (Phase 5).
@@ -166,6 +172,8 @@ class Settings:
             operational_retention_days=_env_int(
                 "POWERBASE_OPERATIONAL_RETENTION_DAYS", 30
             ),
+            workers=_env_int("POWERBASE_WORKERS", 0)
+            or _env_int("WEB_CONCURRENCY", 1),
             vacuum_after_prune=_env_bool("POWERBASE_VACUUM_AFTER_PRUNE", True),
             alerts_enabled=_env_bool("POWERBASE_ALERTS_ENABLED", True),
             alert_window_hours=_env_int("POWERBASE_ALERT_WINDOW_HOURS", 24),
