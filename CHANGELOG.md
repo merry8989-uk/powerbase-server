@@ -4,6 +4,67 @@ All notable changes to Powerbase. The version lives in `powerbase/version.py`
 and is read from there by the build, by `/healthz`, and by the dashboard — one
 source of truth, so the metadata and the running server cannot disagree.
 
+## 1.10.0
+
+Multi-worker deployment: the build says what it supports, instead of leaving an
+operator to work it out from rate limits that do not add up.
+
+### Added
+- **A startup warning and a `/v1/status` field for the deployment shape.** Two
+  things in this build are in-process and count in memory, and neither said so
+  where an operator would look:
+  - **Rate limits multiply.** The per-project token bucket is in-process, so N
+    workers give each project N independent budgets — the configured limit is
+    effectively N times what it says. Nothing breaks; the number is just wrong.
+  - **The scheduler runs N times.** The job ledger interlocks the daily pass, so
+    the rollup and prune do not happen twice a day, but every interval pass runs
+    once per worker.
+- **`POWERBASE_WORKERS`**, falling back to `WEB_CONCURRENCY` (what uvicorn and
+  gunicorn set), falling back to 1. `POWERBASE_WORKERS` wins, so an operator can
+  say "I know, it is one process".
+- `docs/multi-worker.md` — the arithmetic, the log lines, and what to do instead.
+- `powerbase/deployment.py`, a pure function so the check is testable without
+  starting a server.
+
+### Notes
+- A single-process deployment gets an empty warnings list and must stay silent:
+  a warning that fires on the supported shape is wallpaper.
+- The warning names the **arithmetic**, not just the problem — "10/s becomes
+  40/s" is actionable in a way that "rate limits are per process" is not.
+- No shared rate-limit store and no scheduler leader election. Both are written
+  down as not done rather than implied.
+
+## 1.9.0
+
+The two deployment paths that had never been run.
+
+Both `Dockerfile` and `scripts/install.sh` were written and **never executed** —
+the development sandbox has no Docker, no root and no systemd. A missing `COPY`,
+a wrong base image, or a typo in a path would have been found by the first
+self-hoster to try it. CI can run both, so now it does.
+
+### Added
+- **A `docker` CI job**: builds the image, boots it, waits for `/healthz`,
+  asserts the version inside the image matches `powerbase/version.py`, asserts
+  the container reports itself healthy, and asserts the schema was created on
+  boot — a container that starts empty and 500s on every request would otherwise
+  pass a health check. Logs are printed on failure.
+- **An `install-script` CI job**: `shellcheck`, then `--dry-run` with and without
+  a domain, then assertions on every rendered artefact, then
+  `systemd-analyze verify` on the unit.
+- **`scripts/install.sh --dry-run`** — writes every file the script would write
+  into a staging directory and runs none of the commands that change the system.
+  Every system-changing call goes through a `run` helper, so the dry run is a
+  property of the script rather than a second script that drifts from it.
+
+### What this does and does not prove
+- **Docker**: a real build, a real boot, a real health check. Verified.
+- **install.sh**: the **artefacts** are verified — the unit's syntax and every
+  hardening directive, the environment file, the bind-address branch, the CLI
+  wrapper, and that a real admin password is generated. The **install itself is
+  still not proven**, because that needs a real host with root and systemd. The
+  script says so when it finishes a dry run, and this entry says so too.
+
 ## 1.8.0
 
 Analytics events and crashes now appear in the Logs Explorer.
