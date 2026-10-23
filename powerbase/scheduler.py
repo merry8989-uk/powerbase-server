@@ -81,6 +81,7 @@ class MaintenanceScheduler:
             backup_keep=self._settings.backup_keep,
             vacuum=self._settings.vacuum_after_prune,
             now=moment,
+            operational_days=self._settings.operational_retention_days,
         )
         self.last_report = report
         self.last_error = None

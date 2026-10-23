@@ -84,6 +84,11 @@ class Settings:
     maintenance_interval_seconds: int = 300
     backup_dir: str = "./backups"
     backup_keep: int = 7
+    # How long our own housekeeping records are kept: alert deliveries that
+    # have been sent or given up on, and log-drain runs. Separate from the
+    # per-project retention above, because these are not observability data
+    # and are not folded into any rollup.
+    operational_retention_days: int = 30
     vacuum_after_prune: bool = True
 
     # Alerts (Phase 5).
@@ -158,6 +163,9 @@ class Settings:
             maintenance_interval_seconds=_env_int("POWERBASE_MAINTENANCE_INTERVAL_SECONDS", 300),
             backup_dir=os.environ.get("POWERBASE_BACKUP_DIR", "./backups"),
             backup_keep=_env_int("POWERBASE_BACKUP_KEEP", 7),
+            operational_retention_days=_env_int(
+                "POWERBASE_OPERATIONAL_RETENTION_DAYS", 30
+            ),
             vacuum_after_prune=_env_bool("POWERBASE_VACUUM_AFTER_PRUNE", True),
             alerts_enabled=_env_bool("POWERBASE_ALERTS_ENABLED", True),
             alert_window_hours=_env_int("POWERBASE_ALERT_WINDOW_HOURS", 24),

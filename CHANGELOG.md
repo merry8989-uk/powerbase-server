@@ -4,6 +4,31 @@ All notable changes to Powerbase. The version lives in `powerbase/version.py`
 and is read from there by the build, by `/healthz`, and by the dashboard — one
 source of truth, so the metadata and the running server cannot disagree.
 
+## 1.6.0
+
+A bound on the housekeeping tables.
+
+### Added
+- **`alert_deliveries` and `drain_runs` are now pruned.** Both were written on
+  every maintenance pass and nothing ever removed them, so they grew without a
+  bound. They are not observability data and are not folded into any rollup, so
+  they have their own window: `POWERBASE_OPERATIONAL_RETENTION_DAYS`, default
+  30 days, `0` to disable.
+
+### The rule that matters more than the window
+- **A notification that has not been delivered is never pruned.** Only `sent`
+  and `dead` deliveries are finished; `pending` and `failed` are still owed to
+  somebody, and age does not make them less owed. A drain run with no
+  `finished_at` is still in progress and is left alone. Deleting an undelivered
+  row would drop an alert silently, which is the exact failure the delivery
+  queue exists to prevent. There is a test for it.
+
+### Notes
+- Housekeeping is pruned whether or not the observability tables can be, so an
+  instance whose rollups have stopped does not also accumulate these rows.
+- `audit_events` remains unpruned, deliberately: an audit trail you prune is not
+  an audit trail.
+
 ## 1.5.0
 
 The Logs Explorer specification's request and response envelope.

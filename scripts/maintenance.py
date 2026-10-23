@@ -84,7 +84,8 @@ def main() -> int:
 
     if args.daily:
         report = maintenance.run_daily(db, backup_dir=backup_dir, backup_keep=keep,
-                                       vacuum=settings.vacuum_after_prune)
+                                       vacuum=settings.vacuum_after_prune,
+                                       operational_days=settings.operational_retention_days)
         _show("daily pass", report)
         return 0
 

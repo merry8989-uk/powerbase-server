@@ -162,6 +162,31 @@ $ powerbase maintenance --daily
   exports  {'completed': {'queued': 0}, 'expired': {'expired': 1, 'files_removed': 1}}
 ```
 
+### Housekeeping rows get their own window
+
+Two tables are not observability data and are not folded into any rollup, so
+they are not under the floor above. They are pruned on their own clock:
+
+| Table | What it holds |
+|---|---|
+| `alert_deliveries` | every attempt to tell somebody about an incident |
+| `drain_runs` | every log-drain run, and whether it worked |
+
+```bash
+POWERBASE_OPERATIONAL_RETENTION_DAYS=30   # the default
+```
+
+**The rule that matters more than the window.** A `pending` or `failed`
+delivery is a notification somebody has not been told about yet. Age does not
+make it less owed, so those are **never** pruned — only `sent` and `dead` are
+finished, and only those are removed. A drain run with no `finished_at` is
+still in progress and is left alone.
+
+Deleting an undelivered row would drop an alert silently, which is the exact
+failure the delivery queue exists to prevent. There is a test for it.
+
+Setting the window to `0` disables the housekeeping prune entirely.
+
 ## Audit trail
 
 Every export — created, downloaded, deleted, expired — and every key event is
@@ -204,5 +229,8 @@ be large.
 - **Deferred jobs wait for the maintenance pass** (or `powerbase exports --run`).
   There is no dedicated worker, so a deferred job can sit for up to one
   maintenance interval.
-- **`audit_events` is never pruned.** It only grows. At this scale that is
+- **`audit_events` is never pruned.** It only grows, deliberately — an audit
+  trail you prune is not an audit trail. `alert_deliveries` and `drain_runs`
+  *are* pruned; see the housekeeping window above. At this scale the audit
+  table is
   negligible; at a larger one it will need its own retention.

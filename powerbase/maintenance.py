@@ -27,6 +27,11 @@ from .queries import quote_ident
 # Pruned in this order. Child rows go first so the FK cascades from `sessions`
 # have nothing left to remove, and `devices` goes last because a device is only
 # removable once no session references it.
+#: Housekeeping rows (alert deliveries, drain runs) are pruned on this window
+#: when the caller does not supply one. Thirty days is long enough to answer
+#: "did that alert ever go out" and short enough to not grow forever.
+DEFAULT_OPERATIONAL_RETENTION_DAYS = 30
+
 PRUNE_TARGETS: tuple[tuple[str, str], ...] = (
     ("events", "ts"),
     ("logs", "ts"),
@@ -65,16 +70,74 @@ def _record(
 # Pruning
 # --------------------------------------------------------------------------- #
 
-def prune(db: Database, now: datetime | None = None) -> dict:
+def _prune_operational(conn, moment: datetime, days: int) -> dict:
+    """Delete our own housekeeping records — never a notification still owed.
+
+    These two tables are not folded into any rollup, so they are not under
+    the floor that protects the observability tables, and they are pruned on
+    their own window. What they do have is a rule that matters more than the
+    window: a delivery that has not been sent yet is a notification somebody
+    is still owed. Deleting one would drop an alert silently, which is the
+    exact failure the delivery queue exists to prevent.
+    """
+    if days <= 0:
+        return {"skipped": True, "alert_deliveries": 0, "drain_runs": 0}
+
+    cutoff = (moment - timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+
+    # `sent` and `dead` are finished. `pending` and `failed` are not: they
+    # are either due now or waiting on a retry.
+    cursor = conn.execute(
+        "DELETE FROM alert_deliveries WHERE status IN ('sent', 'dead') "
+        "AND created_at < ?",
+        (cutoff,),
+    )
+    deliveries = max(cursor.rowcount, 0)
+
+    # A run still in progress has no finished_at, and is left alone.
+    cursor = conn.execute(
+        "DELETE FROM drain_runs WHERE finished_at IS NOT NULL AND started_at < ?",
+        (cutoff,),
+    )
+    runs = max(cursor.rowcount, 0)
+
+    return {
+        "skipped": False,
+        "alert_deliveries": deliveries,
+        "drain_runs": runs,
+        "window_days": days,
+    }
+
+
+def prune(
+    db: Database,
+    now: datetime | None = None,
+    *,
+    operational_days: int | None = None,
+) -> dict:
     """Delete raw rows older than each app's retention window."""
     moment = now or datetime.now(timezone.utc)
+    days = (
+        DEFAULT_OPERATIONAL_RETENTION_DAYS
+        if operational_days is None
+        else int(operational_days)
+    )
+
+    # These do not depend on rollups, so they are pruned whether or not the
+    # observability tables can be. An instance whose rollups have stopped
+    # should not also accumulate unbounded housekeeping rows.
+    with db.write() as conn:
+        operational = _prune_operational(conn, moment, days)
+
     first_rolled, _last_rolled = rollups.coverage(db, app_id="")
 
     if first_rolled is None:
         detail = "deferred: no rollups yet, nothing is safe to prune"
         with db.write() as conn:
             _record(conn, "prune", None, True, detail, at=moment)
-        return {"skipped": True, "reason": detail, "deleted": {}}
+        return {
+            "skipped": True, "reason": detail, "deleted": {}, "operational": operational
+        }
 
     floor = date.fromisoformat(first_rolled)
     floor_iso = _day_start(floor)
@@ -128,7 +191,13 @@ def prune(db: Database, now: datetime | None = None) -> dict:
             at=moment,
         )
 
-    return {"skipped": False, "cutoff_floor": floor.isoformat(), "deleted": deleted, "total": total}
+    return {
+        "skipped": False,
+        "cutoff_floor": floor.isoformat(),
+        "deleted": deleted,
+        "total": total,
+        "operational": operational,
+    }
 
 
 # --------------------------------------------------------------------------- #
@@ -280,6 +349,7 @@ def run_daily(
     backup_keep: int = 7,
     vacuum: bool = True,
     now: datetime | None = None,
+    operational_days: int | None = None,
 ) -> dict:
     """The nightly pass: roll up yesterday, prune, compact, back up."""
     moment = now or datetime.now(timezone.utc)
@@ -288,7 +358,7 @@ def run_daily(
     report: dict = {"ran_at": moment.isoformat(), "day": day}
 
     report["rollup"] = rollups.rollup_day(db, day, now=moment)
-    report["prune"] = prune(db, now=moment)
+    report["prune"] = prune(db, now=moment, operational_days=operational_days)
 
     if vacuum and not report["prune"]["skipped"]:
         db.vacuum()

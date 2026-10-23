@@ -458,9 +458,13 @@ def test_a_channel_can_be_added_and_removed_over_the_api(make_env):
     assert env.client.get("/v1/alert-channels", headers=admin).json()["items"] == []
 
 
-def test_the_scheduler_folds_reports_into_incidents(make_env):
+def test_the_scheduler_folds_reports_into_incidents(make_env, tmp_path):
     """The pass that used to fire the webhook every time now opens an incident once."""
     env = make_env(admin_password=ADMIN_PASSWORD, alerts_enabled=True)
+    # A tick at this moment crosses a day boundary, so it runs the whole nightly
+    # pass — rollup, prune and a backup. Left at the default `./backups`, this
+    # test wrote a backup into the working tree, which other tests then saw.
+    env.settings.backup_dir = str(tmp_path)
     notify.add_channel(env.db, kind="webhook", target="https://h.test/x")
 
     from powerbase.scheduler import MaintenanceScheduler

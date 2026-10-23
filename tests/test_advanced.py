@@ -359,7 +359,11 @@ def test_capacity_reports_the_tables_that_grow(obs):
     assert isinstance(body["warnings"], list)
 
 
-def test_capacity_warns_when_nothing_has_ever_been_rolled_up(obs):
+def test_capacity_warns_when_nothing_has_ever_been_rolled_up(obs, tmp_path):
+    # The backup directory is set explicitly. Left at the default `./backups`,
+    # this assertion depended on no other test having written a backup there —
+    # which made it pass for the wrong reason and fail for the wrong reason.
+    obs.settings.backup_dir = str(tmp_path)
     body = capacity.report(obs.db, obs.settings)
     assert any("rollup" in warning for warning in body["warnings"])
     assert any("backup" in warning for warning in body["warnings"])

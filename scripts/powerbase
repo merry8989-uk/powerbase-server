@@ -360,6 +360,7 @@ def cmd_maintenance(args) -> int:
             backup_dir=args.backup_dir or settings.backup_dir,
             backup_keep=settings.backup_keep,
             vacuum=settings.vacuum_after_prune,
+            operational_days=settings.operational_retention_days,
         )
         title("nightly pass")
         for key, value in result.items():
