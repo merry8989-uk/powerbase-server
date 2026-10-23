@@ -1,0 +1,57 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "powerbase"
+# Read from `powerbase/version.py`, which is what every module imports and what
+# `/healthz` reports. It used to be hardcoded here, and by the time this was
+# noticed the metadata said 0.5.0 while the code said 1.5.0 — so a release built
+# from it would have been labelled ten versions behind. One source of truth.
+dynamic = ["version"]
+description = "Self-hosted observability platform: log ingestion, a log explorer, traces, metrics, exports, alerting and team access"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+keywords = ["observability", "logs", "tracing", "opentelemetry", "self-hosted"]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Environment :: Web Environment",
+    "Framework :: FastAPI",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: System :: Logging",
+    "Topic :: System :: Monitoring",
+]
+dependencies = [
+    "fastapi>=0.110",
+    "uvicorn>=0.27",
+    "pydantic>=2.5",
+    "jinja2>=3.1",
+    "python-multipart>=0.0.9",
+    "argon2-cffi>=23.1",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0", "httpx>=0.27"]
+
+[project.urls]
+Documentation = "https://github.com/merry8989-uk/powerbase-server#readme"
+Source = "https://github.com/merry8989-uk/powerbase-server"
+
+[tool.setuptools.dynamic]
+version = { attr = "powerbase.version.__version__" }
+
+[tool.setuptools]
+packages = ["powerbase"]
+
+[tool.setuptools.package-data]
+powerbase = ["templates/*.html", "static/*.css", "static/*.js"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = [".", "tests"]
+addopts = "-q"

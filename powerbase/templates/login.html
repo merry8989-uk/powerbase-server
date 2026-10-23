@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sign in · Powerbase</title>
+<link rel="stylesheet" href="/static/app.css">
+</head>
+<body class="centered">
+  <div class="login-card">
+    <div class="brand big"><span class="dot"></span> Powerbase</div>
+
+    {% if disabled %}
+      <p class="muted">The dashboard is disabled.</p>
+      <div class="callout">
+        Set <code>POWERBASE_ADMIN_PASSWORD</code> and restart the service to enable it.
+        The ingestion API is unaffected.
+      </div>
+    {% else %}
+      <p class="muted">Sign in to view diagnostics and usage.</p>
+      {% if error %}<div class="alert">{{ error }}</div>{% endif %}
+      <form method="post" action="/login">
+        <label for="password">Admin password</label>
+        <input type="password" id="password" name="password" autofocus autocomplete="current-password" required>
+        <input type="hidden" name="next" value="{{ next }}">
+        <button class="btn primary" type="submit">Sign in</button>
+      </form>
+    {% endif %}
+  </div>
+</body>
+</html>

@@ -1,0 +1,57 @@
+{% extends "base.html" %}
+{% block title %}Crashes{% endblock %}
+{% block heading %}Crashes{% endblock %}
+
+{% block content %}
+<form class="toolbar" method="get" action="/crashes">
+  <input type="hidden" name="app_id" value="{{ current_app }}">
+  <label>Kind
+    <select name="kind" onchange="this.form.submit()">
+      <option value="">any</option>
+      {% for option in crash_kinds %}
+      <option value="{{ option }}" {{ 'selected' if option == kind else '' }}>{{ option }}</option>
+      {% endfor %}
+    </select>
+  </label>
+  <label>Range
+    <select name="days" onchange="this.form.submit()">
+      {% for option in range_options(days, [7, 14, 30, 90, 365]) %}
+      <option value="{{ option }}" {{ 'selected' if option == days else '' }}>last {{ option }}d</option>
+      {% endfor %}
+    </select>
+  </label>
+</form>
+
+<section class="card">
+  <div class="result-head">
+    <h2>{{ total|number }} crash group{{ '' if total == 1 else 's' }}</h2>
+    <span class="muted">grouped by normalised stack fingerprint</span>
+  </div>
+
+  {% if groups %}
+  <table class="table">
+    <thead>
+      <tr><th>Message</th><th>Kind</th><th class="num">Occurrences</th><th class="num">Devices</th>
+          <th>First seen</th><th>Last seen</th><th>Version</th></tr>
+    </thead>
+    <tbody>
+      {% for group in groups %}
+      <tr>
+        <td class="mono ellipsis">
+          <a href="/crashes/{{ group.fingerprint }}?app_id={{ current_app }}&days={{ days }}">{{ group.message or '(no message)' }}</a>
+        </td>
+        <td><span class="pill">{{ group.kind }}</span></td>
+        <td class="num">{{ group.occurrences|number }}</td>
+        <td class="num">{{ group.devices|number }}</td>
+        <td class="nowrap">{{ group.first_seen|short_ts }}</td>
+        <td class="nowrap">{{ group.last_seen|short_ts }}</td>
+        <td class="mono dim">{{ group.app_version or '—' }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="empty">No crashes in this range.</p>
+  {% endif %}
+</section>
+{% endblock %}

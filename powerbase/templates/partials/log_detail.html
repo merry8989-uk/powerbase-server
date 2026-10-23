@@ -1,0 +1,36 @@
+{% if log %}
+<div class="drawer-head">
+  <div>
+    <span class="level level-{{ log.level|lower }}">{{ log.level }}</span>
+    <span class="mono">{{ log.tag or '—' }}</span>
+    <span class="muted">{{ log.ts|short_ts }}</span>
+  </div>
+  <button class="btn ghost" onclick="document.getElementById('drawer').hidden = true">Close</button>
+</div>
+
+<div class="drawer-body">
+  <h3>Message</h3>
+  <pre class="code">{{ log.message }}</pre>
+
+  {% if log.stacktrace %}
+  <h3>Stacktrace</h3>
+  <pre class="code scroll">{{ log.stacktrace }}</pre>
+  {% endif %}
+
+  <h3>Context</h3>
+  <pre class="code">{{ log.context }}</pre>
+
+  <h3>Origin</h3>
+  <dl class="kv">
+    <dt>App</dt><dd class="mono">{{ log.app_id }}</dd>
+    <dt>Device</dt><dd class="mono"><a href="/devices/{{ log.device_id }}">{{ log.device_id }}</a></dd>
+    <dt>Session</dt><dd class="mono">
+      {% if log.session_id %}<a href="/sessions/{{ log.session_id }}">{{ log.session_id }}</a>{% else %}—{% endif %}
+    </dd>
+    <dt>SDK</dt><dd class="mono">{{ log.sdk_version or '—' }}</dd>
+    <dt>Received</dt><dd class="mono">{{ log.received_at }}</dd>
+  </dl>
+</div>
+{% else %}
+<p class="empty">Log line not found.</p>
+{% endif %}

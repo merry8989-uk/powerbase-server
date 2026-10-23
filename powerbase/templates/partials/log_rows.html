@@ -1,0 +1,41 @@
+<div class="result-head">
+  <span class="muted">{{ total|number }} matching log line{{ '' if total == 1 else 's' }}</span>
+</div>
+
+{% if rows %}
+<table class="table">
+  <thead>
+    <tr><th>When</th><th>Level</th><th>Tag</th><th>Message</th><th>Device</th></tr>
+  </thead>
+  <tbody>
+    {% for row in rows %}
+    <tr class="clickable"
+        hx-get="/partials/log/{{ row.id }}"
+        hx-target="#drawer"
+        hx-swap="innerHTML">
+      <td class="nowrap">{{ row.ts|short_ts }}</td>
+      <td><span class="level level-{{ row.level|lower }}">{{ row.level }}</span></td>
+      <td class="mono">{{ row.tag or '—' }}</td>
+      <td class="ellipsis">{{ row.message }}</td>
+      <td class="mono dim">{{ row.device_id }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+
+<div class="pager">
+  {% if offset > 0 %}
+  <button class="btn ghost"
+          hx-get="/partials/logs?app_id={{ app_id }}&level={{ level or '' }}&tag={{ tag or '' }}&q={{ q or '' }}&days={{ days }}&limit={{ limit }}&offset={{ offset - limit }}"
+          hx-target="#log-results">Previous</button>
+  {% endif %}
+  <span class="muted">{{ offset + 1 }}–{{ offset + rows|length }} of {{ total|number }}</span>
+  {% if has_more %}
+  <button class="btn ghost"
+          hx-get="/partials/logs?app_id={{ app_id }}&level={{ level or '' }}&tag={{ tag or '' }}&q={{ q or '' }}&days={{ days }}&limit={{ limit }}&offset={{ offset + limit }}"
+          hx-target="#log-results">Next</button>
+  {% endif %}
+</div>
+{% else %}
+<p class="empty">No log lines match these filters.</p>
+{% endif %}

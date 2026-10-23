@@ -1,0 +1,644 @@
+#!/usr/bin/env python3
+"""powerbase — manage this Powerbase instance from the shell.
+
+    powerbase status
+    powerbase apps
+    powerbase app create com.acme.shop "Acme Shop" web
+    powerbase keys --app com.acme.shop
+    powerbase key create --app com.acme.shop --scope ingest --label website
+    powerbase key rotate pb_abc123
+    powerbase key revoke pb_abc123
+    powerbase backup
+    powerbase backups
+    powerbase restore /var/lib/powerbase/backups/powerbase-2026-10-22.db --force
+    powerbase maintenance --daily
+    powerbase env
+
+Two design choices worth knowing:
+
+* Most commands read the database **directly** rather than over HTTP. An
+  operator reaches for this tool when something is wrong, which is exactly when
+  the server may be down — so it must not depend on the server being up.
+* `status` additionally pings the local health endpoint and reports whether the
+  process is answering, so you get both views in one place.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import sys
+import urllib.error
+import urllib.request
+from pathlib import Path
+
+# Running from a checkout, or installed under /opt/powerbase.
+for candidate in (Path(__file__).resolve().parent.parent, Path("/opt/powerbase")):
+    if (candidate / "powerbase").is_dir():
+        sys.path.insert(0, str(candidate))
+        break
+
+ENV_FILES = (
+    os.environ.get("POWERBASE_ENV_FILE"),
+    "/etc/powerbase/powerbase.env",
+    ".env",
+)
+
+
+def load_env_file() -> str | None:
+    """Layer a KEY=VALUE file under the real environment.
+
+    Real environment variables win, so `POWERBASE_DB=... powerbase status`
+    overrides the installed configuration without editing it.
+    """
+    for candidate in ENV_FILES:
+        if not candidate:
+            continue
+        path = Path(candidate)
+        if not path.is_file():
+            continue
+        for line in path.read_text().splitlines():
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, _, value = line.partition("=")
+            key = key.strip()
+            if key.startswith("export "):
+                key = key[len("export ") :].strip()
+            os.environ.setdefault(key, value.strip().strip('"').strip("'"))
+        return str(path)
+    return None
+
+
+from powerbase import audit, exports, incidents, notify, team  # noqa: E402
+from powerbase.config import Settings  # noqa: E402
+from powerbase.db import Database  # noqa: E402
+from powerbase.migrations import run_migrations  # noqa: E402
+from powerbase.provision import (  # noqa: E402
+    issue_key,
+    list_keys,
+    provision_app,
+    revoke_key,
+    rotate_key,
+)
+from powerbase.status_api import human_uptime, instance_summary, uptime_seconds  # noqa: E402
+from powerbase.version import __version__  # noqa: E402
+
+OK, WARN, BAD, DIM, RESET = "\033[32m", "\033[33m", "\033[31m", "\033[2m", "\033[0m"
+
+
+def tint(text: str, colour: str) -> str:
+    return text if not sys.stdout.isatty() else f"{colour}{text}{RESET}"
+
+
+def title(text: str) -> None:
+    print(f"\n{tint(text, DIM)}")
+
+
+def row(label: str, value) -> None:
+    print(f"  {label:<26} {value}")
+
+
+def bytes_human(size: int | None) -> str:
+    if size is None:
+        return "—"
+    value = float(size)
+    for unit in ("B", "KB", "MB", "GB"):
+        if value < 1024 or unit == "GB":
+            return f"{value:.0f} {unit}" if unit == "B" else f"{value:.1f} {unit}"
+        value /= 1024
+    return f"{value:.1f} GB"
+
+
+def db_and_settings(args) -> tuple[Database, Settings]:
+    settings = Settings.from_env()
+    if getattr(args, "db", None):
+        settings.db_path = args.db
+    db = Database(settings.db_path)
+    run_migrations(db, settings.migrations_dir)
+    return db, settings
+
+
+def ping_local(settings: Settings) -> str:
+    """Is *this* Powerbase answering?
+
+    Asked over HTTP so it exercises the real path, and it checks the identity
+    rather than the status code. A bare 200 is not evidence: another service on
+    the same port answers 200 too. An operator tool that says "up" while the
+    service is down is worse than no tool at all, so anything that is not
+    Powerbase is reported as exactly that.
+    """
+    url = f"http://127.0.0.1:{settings.port}/v1/status/version"
+    try:
+        with urllib.request.urlopen(url, timeout=2) as response:
+            payload = json.loads(response.read() or b"{}")
+    except urllib.error.HTTPError as exc:
+        # Something is listening and answered — it just is not this endpoint.
+        # Worth distinguishing: "nothing is running" and "something else owns
+        # this port" are different problems with different fixes.
+        return f"{tint('port is busy with something else', WARN)}  ({url} -> HTTP {exc.code})"
+    except (urllib.error.URLError, OSError, ValueError):
+        return f"{tint('not answering', BAD)}  ({url})"
+
+    if payload.get("service") == "powerbase":
+        return f"{tint('up', OK)}  (v{payload.get('version')}, {url})"
+    return f"{tint('port is busy with something else', WARN)}  ({url} -> {payload!r})"
+
+
+# --------------------------------------------------------------------------- #
+# Commands
+# --------------------------------------------------------------------------- #
+def cmd_status(args) -> int:
+    db, settings = db_and_settings(args)
+    summary = instance_summary(db, settings)
+
+    title(f"Powerbase {summary['version']}")
+    row("server process", ping_local(settings))
+    row("database", summary["database"]["path"])
+    row("database reachable", "yes" if summary["database"]["reachable"] else tint("NO", BAD))
+    row("database size", bytes_human(summary["database"]["size_bytes"]))
+    row("journal mode", summary["database"]["journal_mode"])
+    row("uptime (this call)", summary["uptime"])
+
+    title("records")
+    for table, count in summary["totals"].items():
+        row(table, f"{count:,}" if isinstance(count, int) else "—")
+
+    title("ingestion")
+    for key, value in summary["ingest"].items():
+        row(key, value or tint("never", WARN))
+
+    title("maintenance")
+    row("last successful job", summary["maintenance"].get("last_ok_at") or tint("never", WARN))
+    row("recent runs", len(summary["maintenance"].get("recent", [])))
+
+    title("backups")
+    row("directory", summary["backups"].get("dir"))
+    row("count", summary["backups"].get("count"))
+    row("latest", summary["backups"].get("latest") or tint("none", WARN))
+    row("latest at", summary["backups"].get("latest_at") or "—")
+
+    title("settings")
+    for key, value in summary["settings"].items():
+        row(key, value)
+    print()
+    return 0
+
+
+def cmd_apps(args) -> int:
+    db, _ = db_and_settings(args)
+    rows = db.query(
+        """
+        SELECT a.id, a.name, a.platform, a.retention_days,
+               (SELECT COUNT(*) FROM api_keys k WHERE k.app_id = a.id AND k.revoked_at IS NULL) AS live_keys
+        FROM apps a ORDER BY a.id
+        """
+    )
+    if not rows:
+        print("no projects yet. Create one:")
+        print('  powerbase app create com.example.shop "Example Shop" web')
+        return 0
+    title(f"{len(rows)} project(s)")
+    for r in rows:
+        print(f"  {r['id']:<28} {r['name']:<22} {r['platform']:<8} "
+              f"retention {r['retention_days']}d  live keys {r['live_keys']}")
+    print()
+    return 0
+
+
+def cmd_app_create(args) -> int:
+    db, _ = db_and_settings(args)
+    provision_app(db, args.app_id, args.name, args.platform, args.retention_days)
+    title(f"project '{args.app_id}'")
+    row("name", args.name)
+    row("platform", args.platform)
+    row("retention", f"{args.retention_days} days")
+
+    ingest = issue_key(db, args.app_id, "ingest", "initial ingest key")
+    read = issue_key(db, args.app_id, "read", "initial read key")
+
+    title("keys — shown once, copy them now")
+    row("ingest (goes in the app)", ingest)
+    row("read (stays server-side)", read)
+    print(f"\n  {tint('Only the Argon2 hash is stored. These cannot be shown again.', WARN)}\n")
+    return 0
+
+
+def cmd_keys(args) -> int:
+    db, _ = db_and_settings(args)
+    rows = list_keys(db, args.app)
+    if not rows:
+        print("no keys")
+        return 0
+    title(f"{len(rows)} key(s)")
+    for r in rows:
+        state = "revoked" if r["revoked_at"] else ("expired" if _expired(r["expires_at"]) else "live")
+        colour = {"live": OK, "revoked": BAD, "expired": WARN}[state]
+        print(f"  {r['id']:<22} {r['app_id']:<22} {r['scope']:<7} {tint(state, colour):<16} "
+              f"{r['label'] or '—':<18} last used {r['last_used_at'] or 'never'}")
+    print()
+    return 0
+
+
+def _expired(expires_at: str | None) -> bool:
+    from powerbase.migrations import utcnow_iso
+
+    return bool(expires_at and expires_at <= utcnow_iso())
+
+
+def cmd_key_create(args) -> int:
+    db, _ = db_and_settings(args)
+    key_id, token = __import__("powerbase.provision", fromlist=["mint_key"]).mint_key(
+        db, args.app, args.scope, args.label, args.expires_in_days
+    )
+    title("key created")
+    row("key id", key_id)
+    row("project", args.app)
+    row("scope", args.scope)
+    row("expires", f"in {args.expires_in_days} days" if args.expires_in_days else "never")
+    row("token", token)
+    print(f"\n  {tint('Shown once. Store it now.', WARN)}\n")
+    return 0
+
+
+def cmd_key_rotate(args) -> int:
+    db, _ = db_and_settings(args)
+    rotated = rotate_key(db, args.key_id, args.expires_in_days)
+    if rotated is None:
+        print(f"no live key with id {args.key_id}", file=sys.stderr)
+        return 1
+    key_id, token = rotated
+    title("key rotated")
+    row("new key id", key_id)
+    row("rotated from", args.key_id)
+    row("token", token)
+    print(f"\n  {tint('The old key is revoked. Shown once — store it now.', WARN)}\n")
+    return 0
+
+
+def cmd_key_revoke(args) -> int:
+    db, _ = db_and_settings(args)
+    if not revoke_key(db, args.key_id):
+        print(f"no live key with id {args.key_id}", file=sys.stderr)
+        return 1
+    print(f"revoked {args.key_id}")
+    return 0
+
+
+def cmd_backup(args) -> int:
+    from powerbase import maintenance as maintenance_module
+
+    db, settings = db_and_settings(args)
+    directory = args.backup_dir or settings.backup_dir
+    result = maintenance_module.backup(db, directory, keep=settings.backup_keep)
+
+    title("backup written and verified")
+    row("directory", directory)
+    for key in ("path", "name", "size_bytes", "verification", "removed", "ok"):
+        if key in result:
+            value = result[key]
+            if key == "size_bytes":
+                value = bytes_human(value)
+            row(key, value)
+    if "path" not in result and "name" not in result:
+        row("result", result)
+    print()
+    return 0
+
+
+def cmd_backups(args) -> int:
+    from powerbase import maintenance as maintenance_module
+
+    db, settings = db_and_settings(args)
+    directory = args.backup_dir or settings.backup_dir
+    found = maintenance_module.list_backups(directory)
+    if not found:
+        print(f"no backups in {directory}")
+        return 0
+    title(f"{len(found)} backup(s) in {directory}")
+    for item in found[:20]:
+        row(item["name"], bytes_human(item.get("size_bytes")))
+    print()
+    return 0
+
+
+def cmd_restore(args) -> int:
+    from powerbase import maintenance as maintenance_module
+
+    db, settings = db_and_settings(args)
+    target = Path(settings.db_path)
+    if target.exists() and not args.force:
+        print(
+            f"{target} already exists. Restoring replaces it.\n"
+            f"Move it aside first, or pass --force.",
+            file=sys.stderr,
+        )
+        return 1
+    if args.force and target.exists():
+        safety = target.with_suffix(target.suffix + ".before-restore")
+        target.replace(safety)
+        row("previous database moved to", safety)
+    result = maintenance_module.restore(args.file, settings.db_path)
+    title("restored")
+    row("from", args.file)
+    row("to", settings.db_path)
+    for key, value in (result or {}).items():
+        row(key, value)
+    print(f"\n  {tint('Restart the service to pick it up.', WARN)}\n")
+    return 0
+
+
+def cmd_maintenance(args) -> int:
+    from powerbase import maintenance as maintenance_module
+
+    db, settings = db_and_settings(args)
+
+    if args.daily:
+        result = maintenance_module.run_daily(
+            db,
+            backup_dir=args.backup_dir or settings.backup_dir,
+            backup_keep=settings.backup_keep,
+            vacuum=settings.vacuum_after_prune,
+        )
+        title("nightly pass")
+        for key, value in result.items():
+            row(key, value)
+        print()
+        return 0
+
+    # Without --daily this is a read: what has the scheduler actually done?
+    rows = db.query(
+        "SELECT job, day, ran_at, ok, detail FROM job_runs ORDER BY ran_at DESC LIMIT 20"
+    )
+    if not rows:
+        print("no maintenance runs recorded yet")
+        return 0
+    title(f"last {len(rows)} maintenance run(s)")
+    for r in rows:
+        state = tint("ok", OK) if r["ok"] else tint("FAILED", BAD)
+        print(f"  {r['ran_at']}  {r['job']:<12} {r['day'] or '—':<12} {state:<16} {r['detail'] or ''}")
+    print()
+    return 0
+
+
+def cmd_exports(args) -> int:
+    db, settings = db_and_settings(args)
+    if args.expire:
+        title("expired exports")
+        for key, value in exports.expire_jobs(db, settings).items():
+            row(key, value)
+        print()
+        return 0
+    if args.run:
+        title("queued exports")
+        for key, value in exports.complete_queued(db, settings, limit=args.limit).items():
+            row(key, value)
+        print()
+        return 0
+
+    jobs = exports.list_jobs(db, args.app, limit=args.limit)
+    if not jobs:
+        print("no exports yet")
+        return 0
+    title(f"{len(jobs)} export job(s)")
+    for job in jobs:
+        state = job["status"]
+        colour = {"completed": OK, "failed": BAD, "expired": WARN}.get(state, WARN)
+        flag = " truncated" if job.get("truncated") else ""
+        print(f"  {job['id'][:10]}  {job['created_at'][:19]}  {job['format']:<6} "
+              f"{tint(state, colour):<18} {job['row_count'] or 0:>7} rows{flag}")
+    print()
+    return 0
+
+
+def cmd_audit(args) -> int:
+    db, _ = db_and_settings(args)
+    result = audit.list_events(
+        db, app_id=args.app, event_type=args.type, outcome=args.outcome, limit=args.limit
+    )
+    if not result["items"]:
+        print("no audit events")
+        return 0
+    title(f"{result['total']} audit event(s), showing {result['count']}")
+    for item in result["items"]:
+        print(f"  {item['event_time'][:19]}  {item['event_type']:<20} "
+              f"{item['outcome']:<9} {item['app_id'] or '—':<20} {item['target_id'] or ''}")
+    print()
+    return 0
+
+def cmd_owner(args) -> int:
+    """Bootstrap the first owner. Without one, nobody can sign in to the console."""
+    db, settings = db_and_settings(args)
+    password = args.password
+    if not password:
+        import secrets as _secrets
+        password = _secrets.token_urlsafe(18)
+        generated = True
+    else:
+        generated = False
+
+    user = team.ensure_owner(db, args.email, password)
+    title("owner")
+    row("email", user["email"])
+    row("role", user["role"])
+    row("status", user["status"])
+    if generated:
+        title("password — shown once")
+        row("password", password)
+        print(f"\n  {tint('Store it now. It cannot be shown again.', WARN)}\n")
+    else:
+        print()
+    return 0
+
+
+def cmd_users(args) -> int:
+    db, _ = db_and_settings(args)
+    rows = team.list_users(db)
+    if not rows:
+        print("no users yet. Bootstrap the first owner:")
+        print('  powerbase owner --email you@example.com')
+        return 0
+    title(f"{len(rows)} user(s)")
+    for user in rows:
+        print(f"  {user['email']:<32} {user['role']:<10} {user['status']:<9} "
+              f"last login {user['last_login_at'] or 'never'}")
+    print()
+    return 0
+
+
+def cmd_incidents(args) -> int:
+    db, _ = db_and_settings(args)
+    if args.flush:
+        title("delivery queue")
+        for key, value in notify.flush(db, Settings.from_env()).items():
+            row(key, value)
+        print()
+        return 0
+    if args.ack or args.resolve:
+        target = args.ack or args.resolve
+        updated = (
+            incidents.ack(db, target, args.actor or "cli")
+            if args.ack
+            else incidents.resolve(db, target, args.actor or "cli")
+        )
+        if updated is None:
+            print(f"no incident {target}", file=sys.stderr)
+            return 1
+        title("incident")
+        row("id", updated["id"])
+        row("status", updated["status"])
+        print()
+        return 0
+
+    summary = incidents.summary(db)
+    title("incidents")
+    row("open", summary["open"])
+    row("firing", summary["firing"])
+    row("acknowledged", summary["acknowledged"])
+    row("worst", summary["worst"] or "—")
+
+    rows = incidents.list_incidents(db, status=args.status, limit=args.limit)
+    if rows:
+        print()
+        for incident in rows:
+            colour = {"firing": BAD, "acknowledged": WARN, "resolved": DIM}.get(incident["status"], DIM)
+            print(f"  {incident['first_seen_at'][:19]}  {incident['severity']:<9} "
+                  f"{tint(incident['status'], colour):<22} {incident['title'][:52]}")
+    print()
+    return 0
+
+
+def cmd_env(args) -> int:
+    db, settings = db_and_settings(args)
+    title("resolved configuration")
+    for field_name in sorted(settings.__dataclass_fields__):
+        value = getattr(settings, field_name)
+        if "password" in field_name:
+            value = f"set ({len(str(value))} chars)" if value else tint("unset", WARN)
+        if field_name == "migrations_dir":
+            continue
+        row(field_name, value)
+    title("environment file")
+    row("loaded from", load_env_file() or tint("none", WARN))
+    print()
+    return 0
+
+
+# --------------------------------------------------------------------------- #
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="powerbase",
+        description="Manage this Powerbase instance.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=__doc__,
+    )
+    parser.add_argument("--db", help="override POWERBASE_DB")
+    parser.add_argument("--version", action="version", version=f"powerbase {__version__}")
+    subs = parser.add_subparsers(dest="command")
+
+    subs.add_parser("status", help="health, counts, ingestion, backups").set_defaults(func=cmd_status)
+    subs.add_parser("env", help="show the resolved configuration").set_defaults(func=cmd_env)
+
+    apps = subs.add_parser("apps", help="list projects")
+    apps.set_defaults(func=cmd_apps)
+
+    app = subs.add_parser("app", help="project commands").add_subparsers(dest="sub")
+    create = app.add_parser("create", help="create a project and its first two keys")
+    create.add_argument("app_id")
+    create.add_argument("name")
+    create.add_argument("platform", nargs="?", default="android",
+                        choices=["android", "ios", "backend", "web"])
+    create.add_argument("--retention-days", type=int, default=90)
+    create.set_defaults(func=cmd_app_create)
+
+    keys = subs.add_parser("keys", help="list keys")
+    keys.add_argument("--app")
+    keys.set_defaults(func=cmd_keys)
+
+    key = subs.add_parser("key", help="key commands").add_subparsers(dest="sub")
+    kc = key.add_parser("create")
+    kc.add_argument("--app", required=True)
+    kc.add_argument("--scope", required=True, choices=["ingest", "read"])
+    kc.add_argument("--label")
+    kc.add_argument("--expires-in-days", type=int)
+    kc.set_defaults(func=cmd_key_create)
+
+    kr = key.add_parser("rotate", help="mint a replacement, then revoke the old one")
+    kr.add_argument("key_id")
+    kr.add_argument("--expires-in-days", type=int)
+    kr.set_defaults(func=cmd_key_rotate)
+
+    kv = key.add_parser("revoke")
+    kv.add_argument("key_id")
+    kv.set_defaults(func=cmd_key_revoke)
+
+    backup = subs.add_parser("backup", help="write and verify a backup now")
+    backup.add_argument("--backup-dir")
+    backup.set_defaults(func=cmd_backup)
+
+    backups = subs.add_parser("backups", help="list backups")
+    backups.add_argument("--backup-dir")
+    backups.set_defaults(func=cmd_backups)
+
+    restore = subs.add_parser("restore", help="restore a backup over the live database")
+    restore.add_argument("file")
+    restore.add_argument("--force", action="store_true", help="replace an existing database")
+    restore.set_defaults(func=cmd_restore)
+
+    exp = subs.add_parser("exports", help="export jobs, and the links to fetch them")
+    exp.add_argument("--app")
+    exp.add_argument("--limit", type=int, default=50)
+    exp.add_argument("--run", action="store_true", help="finish queued jobs now")
+    exp.add_argument("--expire", action="store_true", help="expire stale jobs and delete their files")
+    exp.set_defaults(func=cmd_exports)
+
+    owner = subs.add_parser("owner", help="bootstrap the first owner account")
+    owner.add_argument("--email", required=True)
+    owner.add_argument("--password", help="omit to generate one and print it once")
+    owner.set_defaults(func=cmd_owner)
+
+    users = subs.add_parser("users", help="list accounts and their roles")
+    users.set_defaults(func=cmd_users)
+
+    inc = subs.add_parser("incidents", help="what is on fire, and the delivery queue")
+    inc.add_argument("--status", choices=["firing", "acknowledged", "resolved"])
+    inc.add_argument("--limit", type=int, default=25)
+    inc.add_argument("--ack", metavar="INCIDENT_ID")
+    inc.add_argument("--resolve", metavar="INCIDENT_ID")
+    inc.add_argument("--actor", help="who is doing it, for the audit trail")
+    inc.add_argument("--flush", action="store_true", help="send whatever is due now")
+    inc.set_defaults(func=cmd_incidents)
+
+    aud = subs.add_parser("audit", help="who did what: exports, keys, retention")
+    aud.add_argument("--app")
+    aud.add_argument("--type", help="e.g. export.created, key.rotated")
+    aud.add_argument("--outcome", choices=["success", "denied", "failure"])
+    aud.add_argument("--limit", type=int, default=50)
+    aud.set_defaults(func=cmd_audit)
+
+    maintenance = subs.add_parser("maintenance", help="rollups, pruning, backups")
+    maintenance.add_argument("--daily", action="store_true", help="run the full nightly pass")
+    maintenance.add_argument("--backup-dir")
+    maintenance.set_defaults(func=cmd_maintenance)
+
+    return parser
+
+
+def main() -> int:
+    parser = build_parser()
+    args = parser.parse_args()
+    if not getattr(args, "func", None):
+        parser.print_help()
+        return 0
+    try:
+        return args.func(args)
+    except KeyboardInterrupt:
+        return 130
+    except Exception as exc:
+        print(f"error: {type(exc).__name__}: {exc}", file=sys.stderr)
+        return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

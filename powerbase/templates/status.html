@@ -1,0 +1,46 @@
+{# Public status page. Standalone rather than extending base.html: base.html
+   renders the admin navigation, and none of it applies to someone who is not
+   signed in. #}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Powerbase — status</title>
+  <link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">Powerbase</div>
+  </header>
+
+  <main class="wrap">
+    <div class="card">
+      <div class="result-head">
+        <h2>Status</h2>
+        <span class="level {{ 'level-info' if healthy else 'level-error' }}">
+          {{ 'operational' if healthy else 'degraded' }}
+        </span>
+      </div>
+
+      <dl class="kv">
+        <dt>Service</dt><dd class="mono">powerbase</dd>
+        <dt>Version</dt><dd class="mono">{{ version }}</dd>
+        <dt>Uptime</dt><dd class="mono">{{ uptime }}</dd>
+        <dt>API base</dt><dd class="mono">/v1</dd>
+      </dl>
+
+      <p class="muted">
+        This page is public and intentionally thin. Counts, database size, the
+        last ingested record and the maintenance ledger are all on
+        <span class="mono">/v1/status</span>, which requires the admin password.
+      </p>
+
+      <div class="pager">
+        <a class="btn ghost" href="/">Sign in</a>
+        <a class="btn ghost" href="/docs">API docs</a>
+      </div>
+    </div>
+  </main>
+</body>
+</html>

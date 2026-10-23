@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+{% block title %}Logs{% endblock %}
+{% block heading %}Log explorer{% endblock %}
+
+{% block content %}
+<form id="filters" class="toolbar"
+      hx-get="/partials/logs"
+      hx-target="#log-results"
+      hx-trigger="load, change, submit, keyup changed delay:300ms from:#q"
+      hx-indicator="#spinner">
+  <input type="hidden" name="app_id" value="{{ current_app }}">
+
+  <label>Level
+    <select name="level">
+      <option value="">any</option>
+      {% for option in levels %}
+      <option value="{{ option }}" {{ 'selected' if option == level else '' }}>{{ option }}</option>
+      {% endfor %}
+    </select>
+  </label>
+
+  <label>Tag <input type="text" name="tag" value="{{ tag or '' }}" size="12" placeholder="any"></label>
+  <label>Search <input type="text" id="q" name="q" value="{{ q or '' }}" size="22" placeholder="full-text over messages"></label>
+
+  <label>Range
+    <select name="days">
+      {% for option in range_options(days) %}
+      <option value="{{ option }}" {{ 'selected' if option == days else '' }}>last {{ option }}d</option>
+      {% endfor %}
+    </select>
+  </label>
+
+  <span id="spinner" class="htmx-indicator spinner"></span>
+</form>
+
+<div id="log-results" class="card"></div>
+<div id="drawer" class="drawer" hidden></div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  // Clicking a row loads its detail; clicking the close button empties the drawer.
+  document.body.addEventListener('htmx:afterSwap', (event) => {
+    if (event.detail.target.id === 'drawer') {
+      event.detail.target.hidden = false;
+    }
+  });
+</script>
+{% endblock %}

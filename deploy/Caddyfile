@@ -1,0 +1,31 @@
+# Caddy in front of Powerbase.
+#
+# With a real domain, Caddy obtains and renews the certificate on its own —
+# there is nothing to configure and nothing to remember to renew. Point an A
+# record at this host first, then run ./setup.sh with that domain.
+#
+# With POWERBASE_DOMAIN=localhost it falls back to Caddy's internal CA, which
+# means https://localhost works but your browser will warn about the
+# certificate. For a bare local run, skip Caddy entirely and use
+# `docker compose up powerbase` with the port mapping uncommented.
+
+{$POWERBASE_DOMAIN:localhost} {
+	encode zstd gzip
+
+	# The ingest path is the hot one; everything else is small.
+	reverse_proxy powerbase:8080
+
+	# Uncomment to keep access logs (they contain client IPs).
+	# log {
+	# 	output file /data/access.log
+	# }
+
+	header {
+		# The app sets its own security headers; these are the ones that
+		# belong at the edge.
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "no-referrer"
+		-Server
+	}
+}

@@ -1,0 +1,54 @@
+{% extends "base.html" %}
+{% block title %}Crash group{% endblock %}
+{% block heading %}Crash group{% endblock %}
+
+{% block content %}
+<p><a href="/crashes?app_id={{ current_app }}&days={{ days }}">&larr; All crash groups</a></p>
+
+<section class="card">
+  <div class="result-head">
+    <h2 class="mono">{{ group.message if group else fingerprint }}</h2>
+    {% if group %}<span class="pill">{{ group.kind }}</span>{% endif %}
+  </div>
+
+  <div class="kpi-row small">
+    <div class="kpi"><div class="kpi-value">{{ (group.occurrences if group else total)|number }}</div><div class="kpi-label">Occurrences</div></div>
+    <div class="kpi"><div class="kpi-value">{{ (group.devices if group else 0)|number }}</div><div class="kpi-label">Devices affected</div></div>
+    <div class="kpi"><div class="kpi-value">{{ (group.first_seen if group else '—')|short_ts }}</div><div class="kpi-label">First seen</div></div>
+    <div class="kpi"><div class="kpi-value">{{ (group.last_seen if group else '—')|short_ts }}</div><div class="kpi-label">Last seen</div></div>
+  </div>
+
+  <dl class="kv">
+    <dt>Fingerprint</dt><dd class="mono">{{ fingerprint }}</dd>
+    <dt>App version</dt><dd class="mono">{{ (group.app_version if group else None) or '—' }}</dd>
+  </dl>
+</section>
+
+<section class="card">
+  <h2>Occurrences ({{ total|number }})</h2>
+  {% if occurrences %}
+  <table class="table">
+    <thead><tr><th>When</th><th>Device</th><th>Session</th><th>Version</th><th>Handled</th></tr></thead>
+    <tbody>
+      {% for row in occurrences %}
+      <tr>
+        <td class="nowrap">{{ row.ts|short_ts }}</td>
+        <td class="mono"><a href="/devices/{{ row.device_id }}?app_id={{ current_app }}">{{ row.device_id }}</a></td>
+        <td class="mono">{% if row.session_id %}<a href="/sessions/{{ row.session_id }}?app_id={{ current_app }}">{{ row.session_id }}</a>{% else %}—{% endif %}</td>
+        <td class="mono dim">{{ row.app_version or '—' }}</td>
+        <td>{{ 'yes' if row.handled else 'no' }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+
+  {% set first = occurrences[0] %}
+  {% if first.stacktrace %}
+  <h3>Stacktrace</h3>
+  <pre class="code scroll">{{ first.stacktrace }}</pre>
+  {% endif %}
+  {% else %}
+  <p class="empty">No occurrences in this range.</p>
+  {% endif %}
+</section>
+{% endblock %}

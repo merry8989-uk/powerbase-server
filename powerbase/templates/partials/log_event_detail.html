@@ -1,0 +1,80 @@
+{% if event %}
+<div class="drawer-head">
+  <div>
+    <span class="level level-{{ event.severity|lower }}">{{ event.severity }}</span>
+    <span class="mono">{{ event.event_type }}</span>
+    <span class="muted">{{ event.event_time|short_ts }}</span>
+  </div>
+  <button class="btn ghost" onclick="document.getElementById('drawer').hidden = true">Close</button>
+</div>
+
+<div class="drawer-body">
+  {% if event.message %}
+  <h3>Message</h3>
+  <pre class="code">{{ event.message }}</pre>
+  {% endif %}
+
+  <h3>Request</h3>
+  <dl class="kv">
+    <dt>Route</dt><dd class="mono">{{ event.route_template or '—' }}</dd>
+    <dt>Method</dt><dd class="mono">{{ event.http_method or '—' }}</dd>
+    <dt>Status</dt><dd class="mono">{{ event.status_code or '—' }}</dd>
+    <dt>Duration</dt><dd class="mono">{{ event.duration_ms ~ ' ms' if event.duration_ms is not none else '—' }}</dd>
+    <dt>Error code</dt><dd class="mono">{{ event.error_code or '—' }}</dd>
+    <dt>Fingerprint</dt><dd class="mono">{{ event.error_fingerprint or '—' }}</dd>
+  </dl>
+
+  <h3>Correlation</h3>
+  <dl class="kv">
+    <dt>Trace</dt><dd class="mono">{{ event.trace_id or '—' }}</dd>
+    <dt>Span</dt><dd class="mono">{{ event.span_id or '—' }}</dd>
+    <dt>Request</dt><dd class="mono">{{ event.request_id or '—' }}</dd>
+  </dl>
+
+  <h3>Origin</h3>
+  <dl class="kv">
+    <dt>App</dt><dd class="mono">{{ event.app_id }}</dd>
+    <dt>Source</dt><dd class="mono">{{ event.source }}</dd>
+    <dt>Service</dt><dd class="mono">{{ event.service_name or '—' }}</dd>
+    <dt>Environment</dt><dd class="mono">{{ event.environment or '—' }}</dd>
+    <dt>Version</dt><dd class="mono">{{ event.app_version or '—' }}</dd>
+    <dt>Release</dt><dd class="mono">{{ event.release_id or '—' }}</dd>
+    <dt>SDK</dt><dd class="mono">{{ event.sdk_version or '—' }}</dd>
+    <dt>Event id</dt><dd class="mono">{{ event.event_id }}</dd>
+    <dt>Received</dt><dd class="mono">{{ event.received_at }}</dd>
+    <dt>Redaction</dt><dd class="mono">
+      {% if event.redaction_version %}v{{ event.redaction_version }}{% else %}not applied{% endif %}
+    </dd>
+  </dl>
+
+  <h3>Attributes</h3>
+  {% if event.attributes %}
+  <pre class="code">{{ event.attributes }}</pre>
+  {% else %}
+  <p class="muted">None recorded. Keys naming a credential are dropped before storage.</p>
+  {% endif %}
+
+  <h3>Related events</h3>
+  {% if related %}
+  <p class="muted">Sharing this event's trace id or error fingerprint.</p>
+  <table class="table">
+    <thead><tr><th>When</th><th>Severity</th><th>Route</th><th>Status</th><th>Message</th></tr></thead>
+    <tbody>
+      {% for row in related %}
+      <tr>
+        <td class="nowrap mono">{{ row.event_time|short_ts }}</td>
+        <td><span class="level level-{{ row.severity|lower }}">{{ row.severity }}</span></td>
+        <td class="mono ellipsis">{{ row.route_template or '—' }}</td>
+        <td class="mono">{{ row.status_code or '—' }}</td>
+        <td class="ellipsis">{{ row.message or '—' }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="muted">Nothing else shares a trace id or fingerprint with this event.</p>
+  {% endif %}
+</div>
+{% else %}
+<p class="empty">Event not found.</p>
+{% endif %}

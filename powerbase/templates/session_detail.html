@@ -1,0 +1,80 @@
+{% extends "base.html" %}
+{% block title %}Session{% endblock %}
+{% block heading %}Session{% endblock %}
+
+{% block content %}
+<p><a href="/sessions?app_id={{ current_app }}">&larr; All sessions</a></p>
+
+<section class="card">
+  <h2 class="mono">{{ session.id }}</h2>
+  <div class="kpi-row small">
+    <div class="kpi"><div class="kpi-value">{{ session.duration_ms|duration }}</div><div class="kpi-label">Duration</div></div>
+    <div class="kpi"><div class="kpi-value">{{ event_total|number }}</div><div class="kpi-label">Events</div></div>
+    <div class="kpi"><div class="kpi-value">{{ log_total|number }}</div><div class="kpi-label">Logs</div></div>
+    <div class="kpi {{ 'bad' if crashes else '' }}"><div class="kpi-value">{{ crashes|length }}</div><div class="kpi-label">Crashes</div></div>
+  </div>
+  <dl class="kv">
+    <dt>Device</dt><dd class="mono"><a href="/devices/{{ session.device_id }}?app_id={{ current_app }}">{{ session.device_id }}</a></dd>
+    <dt>Started</dt><dd class="mono">{{ session.started_at }}</dd>
+    <dt>Ended</dt><dd class="mono">{{ session.ended_at or '—' }}</dd>
+    <dt>Ended because</dt><dd><span class="pill">{{ session.end_reason or 'open' }}</span></dd>
+    <dt>App / OS</dt><dd class="mono">{{ session.app_version or '—' }} / {{ session.os_version or '—' }}</dd>
+    <dt>Country</dt><dd class="mono">{{ session.country or '—' }}</dd>
+    <dt>User ref</dt><dd class="mono">{{ session.user_ref or '—' }}</dd>
+  </dl>
+</section>
+
+{% if crashes %}
+<section class="card">
+  <h2>Crashes in this session</h2>
+  {% for crash in crashes %}
+  <div class="crash-block">
+    <div class="result-head">
+      <span class="pill">{{ crash.kind }}</span>
+      <span class="mono">{{ crash.message or '(no message)' }}</span>
+      <span class="muted">{{ crash.ts|short_ts }}</span>
+    </div>
+    {% if crash.stacktrace %}<pre class="code scroll">{{ crash.stacktrace }}</pre>{% endif %}
+  </div>
+  {% endfor %}
+</section>
+{% endif %}
+
+<section class="card">
+  <h2>Event timeline ({{ event_total|number }})</h2>
+  {% if events %}
+  <table class="table compact">
+    <thead><tr><th>When</th><th>Event</th><th>Screen</th><th>Properties</th></tr></thead>
+    <tbody>
+      {% for event in events %}
+      <tr>
+        <td class="nowrap">{{ event.ts|short_ts }}</td>
+        <td class="mono">{{ event.name }}</td>
+        <td class="mono dim">{{ event.screen or '—' }}</td>
+        <td class="mono dim ellipsis">{{ event.properties }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}<p class="empty">No events recorded in this session.</p>{% endif %}
+</section>
+
+<section class="card">
+  <h2>Logs ({{ log_total|number }})</h2>
+  {% if logs %}
+  <table class="table compact">
+    <thead><tr><th>When</th><th>Level</th><th>Tag</th><th>Message</th></tr></thead>
+    <tbody>
+      {% for log in logs %}
+      <tr>
+        <td class="nowrap">{{ log.ts|short_ts }}</td>
+        <td><span class="level level-{{ log.level|lower }}">{{ log.level }}</span></td>
+        <td class="mono">{{ log.tag or '—' }}</td>
+        <td class="ellipsis">{{ log.message }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}<p class="empty">No logs recorded in this session.</p>{% endif %}
+</section>
+{% endblock %}

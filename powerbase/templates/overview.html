@@ -1,0 +1,140 @@
+{% extends "base.html" %}
+{% block title %}Overview{% endblock %}
+{% block heading %}Overview{% endblock %}
+
+{% block content %}
+<form class="toolbar" method="get" action="/">
+  <input type="hidden" name="app_id" value="{{ current_app }}">
+  <label>Range
+    <select name="days" onchange="this.form.submit()">
+      {% for option in range_options(days) %}
+      <option value="{{ option }}" {{ 'selected' if option == days else '' }}>last {{ option }}d</option>
+      {% endfor %}
+    </select>
+  </label>
+</form>
+
+<div class="kpi-row">
+  <div class="kpi">
+    <div class="kpi-value">{{ summary.active_devices|number }}</div>
+    <div class="kpi-label">Active devices</div>
+  </div>
+  <div class="kpi">
+    <div class="kpi-value">{{ summary.sessions|number }}</div>
+    <div class="kpi-label">Sessions</div>
+  </div>
+  <div class="kpi">
+    <div class="kpi-value">{{ summary.events|number }}</div>
+    <div class="kpi-label">Events</div>
+  </div>
+  <div class="kpi {{ 'good' if summary.crash_free_rate >= 0.99 else ('warn' if summary.crash_free_rate >= 0.95 else 'bad') }}">
+    <div class="kpi-value">{{ summary.crash_free_rate|percent }}</div>
+    <div class="kpi-label">Crash-free sessions</div>
+  </div>
+  <div class="kpi {{ 'bad' if summary.error_logs else '' }}">
+    <div class="kpi-value">{{ summary.error_logs|number }}</div>
+    <div class="kpi-label">Error logs</div>
+  </div>
+  <div class="kpi">
+    <div class="kpi-value">{{ summary.avg_session_duration_ms|duration }}</div>
+    <div class="kpi-label">Avg session</div>
+  </div>
+</div>
+
+<div class="grid-2">
+  <section class="card">
+    <h2>Events per day</h2>
+    <div class="chart-box"><canvas id="eventsChart"></canvas></div>
+  </section>
+  <section class="card">
+    <h2>Crashes per day</h2>
+    <div class="chart-box"><canvas id="crashesChart"></canvas></div>
+  </section>
+</div>
+
+<div class="grid-3">
+  <section class="card">
+    <h2>Top screens</h2>
+    {% if top_screens %}
+    <ul class="rank">
+      {% for row in top_screens %}
+      <li><span class="rank-key">{{ row.key }}</span><span class="rank-val">{{ row.value|number }}</span></li>
+      {% endfor %}
+    </ul>
+    {% else %}<p class="muted">No data in this range.</p>{% endif %}
+  </section>
+
+  <section class="card">
+    <h2>Top events</h2>
+    {% if top_events %}
+    <ul class="rank">
+      {% for row in top_events %}
+      <li><span class="rank-key">{{ row.key }}</span><span class="rank-val">{{ row.value|number }}</span></li>
+      {% endfor %}
+    </ul>
+    {% else %}<p class="muted">No data in this range.</p>{% endif %}
+  </section>
+
+  <section class="card">
+    <h2>Top device models</h2>
+    {% if top_devices %}
+    <ul class="rank">
+      {% for row in top_devices %}
+      <li><span class="rank-key">{{ row.key }}</span><span class="rank-val">{{ row.value|number }}</span></li>
+      {% endfor %}
+    </ul>
+    {% else %}<p class="muted">No data in this range.</p>{% endif %}
+  </section>
+</div>
+
+<div class="grid-2">
+  <section class="card">
+    <h2>Top crash groups</h2>
+    {% if recent_crashes %}
+    <table class="table compact">
+      <thead><tr><th>Message</th><th class="num">Count</th><th class="num">Devices</th><th>Last seen</th></tr></thead>
+      <tbody>
+        {% for group in recent_crashes %}
+        <tr>
+          <td class="mono ellipsis">
+            <a href="/crashes/{{ group.fingerprint }}?app_id={{ current_app }}&days={{ days }}">{{ group.message or group.kind }}</a>
+          </td>
+          <td class="num">{{ group.occurrences|number }}</td>
+          <td class="num">{{ group.devices|number }}</td>
+          <td class="nowrap">{{ group.last_seen|short_ts }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}<p class="muted">No crashes in this range. Good.</p>{% endif %}
+  </section>
+
+  <section class="card">
+    <h2>Recent errors</h2>
+    {% if recent_errors %}
+    <table class="table compact">
+      <thead><tr><th>Level</th><th>Tag</th><th>Message</th><th>When</th></tr></thead>
+      <tbody>
+        {% for row in recent_errors %}
+        <tr>
+          <td><span class="level level-{{ row.level|lower }}">{{ row.level }}</span></td>
+          <td class="mono">{{ row.tag or '—' }}</td>
+          <td class="ellipsis">{{ row.message }}</td>
+          <td class="nowrap">{{ row.ts|short_ts }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}<p class="muted">No errors in this range.</p>{% endif %}
+  </section>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  const trend = {{ trend|tojson }};
+  const crashTrend = {{ crash_trend|tojson }};
+  lineChart('eventsChart', trend.map(p => p.bucket.slice(5)), trend.map(p => p.value), 'events');
+  lineChart('crashesChart', crashTrend.map(p => p.bucket.slice(5)), crashTrend.map(p => p.value), 'crashes', 'var(--bad)');
+</script>
+{% endblock %}

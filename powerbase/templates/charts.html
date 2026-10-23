@@ -1,0 +1,86 @@
+{% extends "base.html" %}
+{% block title %}Charts{% endblock %}
+{% block heading %}Charts{% endblock %}
+
+{% block content %}
+<form class="toolbar" method="get" action="/charts">
+  <input type="hidden" name="app_id" value="{{ current_app }}">
+  <label>Metric
+    <select name="metric" onchange="this.form.submit()">
+      {% for option in metrics %}
+      <option value="{{ option }}" {{ 'selected' if option == metric else '' }}>{{ option.replace('_', ' ') }}</option>
+      {% endfor %}
+    </select>
+  </label>
+  <label>Bucket
+    <select name="bucket" onchange="this.form.submit()">
+      <option value="day" {{ 'selected' if bucket == 'day' else '' }}>daily</option>
+      <option value="hour" {{ 'selected' if bucket == 'hour' else '' }}>hourly</option>
+    </select>
+  </label>
+  <label>Range
+    <select name="days" onchange="this.form.submit()">
+      {% for option in range_options(days) %}
+      <option value="{{ option }}" {{ 'selected' if option == days else '' }}>last {{ option }}d</option>
+      {% endfor %}
+    </select>
+  </label>
+  <label>Break down by
+    <select name="dimension" onchange="this.form.submit()">
+      {% for option in dimensions %}
+      <option value="{{ option }}" {{ 'selected' if option == dimension else '' }}>{{ option.replace('_', ' ') }}</option>
+      {% endfor %}
+    </select>
+  </label>
+</form>
+
+<section class="card">
+  <div class="result-head">
+    <h2>{{ metric.replace('_', ' ') }} per {{ 'hour' if bucket == 'hour' else 'day' }}</h2>
+    <span class="pill" title="{% if source == 'rollup' %}Aggregated from the metrics_daily rollups{% else %}Aggregated from the raw tables{% endif %}">
+      source: {{ source }}
+    </span>
+  </div>
+  {% if points %}
+  <div class="chart-box tall"><canvas id="seriesChart"></canvas></div>
+  {% else %}
+  <p class="empty">No data for this metric in the selected range.</p>
+  {% endif %}
+  <p class="muted">
+    {% if source == 'rollup' %}
+    Served from the daily rollups — the raw rows for this range may already be pruned.
+    {% else %}
+    Served by aggregating the raw tables.
+    {% endif %}
+  </p>
+</section>
+
+<section class="card">
+  <h2>Top {{ dimension.replace('_', ' ') }}</h2>
+  {% if top %}
+  <div class="chart-box"><canvas id="topChart"></canvas></div>
+  <table class="table compact">
+    <thead><tr><th>{{ dimension.replace('_', ' ') }}</th><th class="num">Count</th></tr></thead>
+    <tbody>
+      {% for row in top %}
+      <tr><td class="mono">{{ row.key }}</td><td class="num">{{ row.value|number }}</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="empty">No data for this breakdown in the selected range.</p>
+  {% endif %}
+</section>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  // NOTE: do not name these `top` — the browser already defines window.top,
+  // and a top-level `const top` is a SyntaxError that kills the whole script.
+  const points = {{ points|tojson }};
+  const topValues = {{ top|tojson }};
+  const labels = points.map(p => p.bucket.length > 10 ? p.bucket.slice(5) : p.bucket);
+  lineChart('seriesChart', labels, points.map(p => p.value), '{{ metric }}');
+  barChart('topChart', topValues.map(t => t.key), topValues.map(t => t.value));
+</script>
+{% endblock %}

@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+{% block title %}Device{% endblock %}
+{% block heading %}Device{% endblock %}
+
+{% block content %}
+<p><a href="/devices?app_id={{ current_app }}">&larr; All devices</a></p>
+
+<section class="card">
+  <h2 class="mono">{{ device.id }}</h2>
+  <dl class="kv">
+    <dt>Model</dt><dd>{{ device.model or '—' }}</dd>
+    <dt>Manufacturer</dt><dd>{{ device.manufacturer or '—' }}</dd>
+    <dt>OS</dt><dd class="mono">{{ device.os_version or '—' }}</dd>
+    <dt>App version</dt><dd class="mono">{{ device.app_version or '—' }}</dd>
+    <dt>SDK</dt><dd class="mono">{{ device.sdk_version or '—' }}</dd>
+    <dt>Locale</dt><dd class="mono">{{ device.locale or '—' }}</dd>
+    <dt>First seen</dt><dd class="mono">{{ device.first_seen }}</dd>
+    <dt>Last seen</dt><dd class="mono">{{ device.last_seen }}</dd>
+  </dl>
+</section>
+
+<section class="card">
+  <h2>Sessions ({{ total|number }})</h2>
+  {% if sessions %}
+  <table class="table">
+    <thead><tr><th>Started</th><th>Duration</th><th>Ended because</th><th class="num">Events</th>
+               <th class="num">Logs</th><th class="num">Crashes</th><th>Session</th></tr></thead>
+    <tbody>
+      {% for session in sessions %}
+      <tr>
+        <td class="nowrap">{{ session.started_at|short_ts }}</td>
+        <td>{{ session.duration_ms|duration }}</td>
+        <td><span class="pill">{{ session.end_reason or 'open' }}</span></td>
+        <td class="num">{{ session.event_count|number }}</td>
+        <td class="num">{{ session.log_count|number }}</td>
+        <td class="num">{{ session.crash_count|number }}</td>
+        <td class="mono"><a href="/sessions/{{ session.id }}?app_id={{ current_app }}">{{ session.id }}</a></td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="empty">No sessions for this device.</p>
+  {% endif %}
+</section>
+{% endblock %}

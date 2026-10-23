@@ -1,0 +1,139 @@
+{% extends "base.html" %}
+{% block title %}Data browser{% endblock %}
+{% block heading %}Data browser{% endblock %}
+
+{% block content %}
+<div class="browser">
+  <aside class="card table-list">
+    <h2>Tables</h2>
+    <ul>
+      {% for t in tables %}
+      <li>
+        <a href="/data/{{ t.name }}?app_id={{ current_app }}"
+           class="{{ 'active' if t.name == table else '' }}">
+          <span class="mono">{{ t.name }}</span>
+          <span class="dim">{{ t.rows|number }}</span>
+        </a>
+      </li>
+      {% endfor %}
+    </ul>
+  </aside>
+
+  <section class="card grow">
+    {% if error %}<div class="alert">{{ error }}</div>{% endif %}
+
+    {% if table %}
+    <div class="result-head">
+      <h2 class="mono">{{ table }}</h2>
+      <span class="muted">{{ total|number }} row{{ '' if total == 1 else 's' }}</span>
+      {% if filter_col %}
+      <span class="chip">
+        {{ filter_col }} = {{ filter_val }}
+        <a href="/data/{{ table }}?app_id={{ current_app }}">&times;</a>
+      </span>
+      {% endif %}
+    </div>
+
+    {% if rows %}
+    <div class="table-scroll">
+      <table class="table">
+        <thead>
+          <tr>
+            {% for column in columns %}
+            <th>
+              <a href="/data/{{ table }}?app_id={{ current_app }}&order_by={{ column }}&order={{ 'asc' if order_by == column and order == 'desc' else 'desc' }}{% if filter_col %}&filter_col={{ filter_col }}&filter_val={{ filter_val }}{% endif %}">
+                {{ column }}{% if order_by == column %} {{ '▲' if order == 'asc' else '▼' }}{% endif %}
+              </a>
+            </th>
+            {% endfor %}
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in rows %}
+          <tr>
+            {% for column in columns %}
+            {% set value = row[column] %}
+            <td class="mono">
+              {% if value is none %}
+                <span class="dim">null</span>
+              {% elif column in row_links and value|string %}
+                {% set target = row_links[column] %}
+                <a href="/data/{{ target[0] }}?app_id={{ current_app }}&filter_col={{ target[1] }}&filter_val={{ value }}">{{ value }}</a>
+              {% elif value|string|length > 60 %}
+                <span class="ellipsis" title="{{ value }}">{{ value|string|truncate(60) }}</span>
+              {% else %}
+                {{ value }}
+              {% endif %}
+            </td>
+            {% endfor %}
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+
+    <div class="pager">
+      {% if offset > 0 %}
+      <a class="btn ghost" href="/data/{{ table }}?app_id={{ current_app }}&offset={{ offset - limit }}&limit={{ limit }}&order_by={{ order_by or '' }}&order={{ order }}">Previous</a>
+      {% endif %}
+      <span class="muted">{{ offset + 1 }}–{{ offset + rows|length }} of {{ total|number }}</span>
+      {% if offset + rows|length < total %}
+      <a class="btn ghost" href="/data/{{ table }}?app_id={{ current_app }}&offset={{ offset + limit }}&limit={{ limit }}&order_by={{ order_by or '' }}&order={{ order }}">Next</a>
+      {% endif %}
+    </div>
+
+    {% if foreign_keys %}
+    <h3>Relationships</h3>
+    <ul class="node-list">
+      {% for fk in foreign_keys %}
+      <li><code>{{ fk.from }}</code> &rarr; <a href="/data/{{ fk.table }}?app_id={{ current_app }}">{{ fk.table }}</a>.<code>{{ fk.to }}</code></li>
+      {% endfor %}
+    </ul>
+    {% endif %}
+
+    {% else %}
+    <p class="empty">No rows.</p>
+    {% endif %}
+
+    {% else %}
+    <p class="empty">Pick a table on the left to browse its rows.</p>
+    {% endif %}
+  </section>
+</div>
+
+<section class="card">
+  <div class="result-head">
+    <h2>Maintenance</h2>
+    <span class="muted">
+      rollups cover
+      {% if rollup_coverage.first_day %}
+      <span class="mono">{{ rollup_coverage.first_day }}</span> &rarr; <span class="mono">{{ rollup_coverage.last_day }}</span>
+      {% else %}
+      nothing yet
+      {% endif %}
+    </span>
+  </div>
+
+  {% if job_runs %}
+  <table class="table compact">
+    <thead><tr><th>Job</th><th>Day</th><th>Ran at</th><th>Result</th><th>Detail</th></tr></thead>
+    <tbody>
+      {% for run in job_runs %}
+      <tr>
+        <td><span class="pill">{{ run.job }}</span></td>
+        <td class="mono dim">{{ run.day or '—' }}</td>
+        <td class="nowrap">{{ run.ran_at|short_ts }}</td>
+        <td><span class="level level-{{ 'info' if run.ok else 'error' }}">{{ 'ok' if run.ok else 'failed' }}</span></td>
+        <td class="mono dim ellipsis">{{ run.detail or '' }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="empty">
+    No maintenance has run yet. The server runs it nightly, or run it by hand with
+    <code>python scripts/maintenance.py --daily</code>.
+  </p>
+  {% endif %}
+</section>
+{% endblock %}

@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+{% block title %}Sessions{% endblock %}
+{% block heading %}Sessions{% endblock %}
+
+{% block content %}
+<form class="toolbar" method="get" action="/sessions">
+  <input type="hidden" name="app_id" value="{{ current_app }}">
+  <label>Device <input type="text" name="device_id" value="{{ device_id or '' }}" placeholder="all devices" size="22"></label>
+  <label>Range
+    <select name="days" onchange="this.form.submit()">
+      {% for option in range_options(days) %}
+      <option value="{{ option }}" {{ 'selected' if option == days else '' }}>last {{ option }}d</option>
+      {% endfor %}
+    </select>
+  </label>
+  <button class="btn" type="submit">Filter</button>
+</form>
+
+<section class="card">
+  <div class="result-head"><h2>{{ total|number }} session{{ '' if total == 1 else 's' }}</h2></div>
+  {% if sessions %}
+  <table class="table">
+    <thead><tr><th>Started</th><th>Device</th><th>Duration</th><th>Ended because</th>
+               <th class="num">Events</th><th class="num">Logs</th><th class="num">Crashes</th><th>Country</th></tr></thead>
+    <tbody>
+      {% for session in sessions %}
+      <tr>
+        <td class="nowrap"><a href="/sessions/{{ session.id }}?app_id={{ current_app }}">{{ session.started_at|short_ts }}</a></td>
+        <td class="mono dim">{{ session.device_id }}</td>
+        <td>{{ session.duration_ms|duration }}</td>
+        <td><span class="pill">{{ session.end_reason or 'open' }}</span></td>
+        <td class="num">{{ session.event_count|number }}</td>
+        <td class="num">{{ session.log_count|number }}</td>
+        <td class="num {{ 'bad' if session.crash_count else '' }}">{{ session.crash_count|number }}</td>
+        <td class="mono dim">{{ session.country or '—' }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="empty">No sessions in this range.</p>
+  {% endif %}
+</section>
+{% endblock %}

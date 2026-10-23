@@ -1,0 +1,47 @@
+# Powerbase: the server, plus Caddy in front of it for automatic TLS.
+#
+#   ./setup.sh                 # localhost
+#   ./setup.sh logs.example.com   # a real domain, with a certificate
+#
+# The server is not published to the host on purpose — only Caddy is. Comment
+# the `expose`/`ports` pair below if you want to reach :8080 directly while
+# developing.
+
+services:
+  powerbase:
+    build: .
+    image: powerbase:local
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      # Override the file-based defaults so the volume is the only state.
+      POWERBASE_DB: /data/powerbase.db
+      POWERBASE_BACKUP_DIR: /data/backups
+    volumes:
+      - powerbase-data:/data
+    expose:
+      - "8080"
+    # ports:
+    #   - "8080:8080"
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    depends_on:
+      - powerbase
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      POWERBASE_DOMAIN: ${POWERBASE_DOMAIN:-localhost}
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      # Caddy keeps its certificates here. Losing this volume means re-issuing
+      # them, which is rate-limited by Let's Encrypt — so it is a real volume.
+      - caddy-data:/data
+      - caddy-config:/config
+
+volumes:
+  powerbase-data:
+  caddy-data:
+  caddy-config:

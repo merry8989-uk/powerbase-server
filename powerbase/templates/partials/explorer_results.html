@@ -1,0 +1,82 @@
+{% if error %}
+<p class="empty">That query was refused: {{ error }}</p>
+{% else %}
+
+<div class="result-head">
+  <span class="muted">
+    {{ page.items|length }} of {{ stats.total|number }} matching event{{ '' if stats.total == 1 else 's' }}
+    in the last {{ params.get('days') }}d
+    · query took {{ page.elapsed_ms }} ms
+    {% if page.truncated %}· <strong>more results exist</strong>{% endif %}
+  </span>
+</div>
+
+{% if stats.buckets %}
+{# Volume over time, as inline bars. No chart library: the data is a list of
+   counts and a bar is a div with a width. #}
+<div class="histogram">
+  {% set peak = stats.buckets|map(attribute='count')|max %}
+  {% for item in stats.buckets %}
+  <div class="histogram-col" title="{{ item.bucket }} — {{ item.count }} event{{ '' if item.count == 1 else 's' }}{% if item.errors %}, {{ item.errors }} error{{ '' if item.errors == 1 else 's' }}{% endif %}">
+    <div class="histogram-bar {{ 'has-errors' if item.errors else '' }}"
+         style="height: {{ (item.count / peak * 100)|round(1) }}%"></div>
+  </div>
+  {% endfor %}
+</div>
+<div class="histogram-axis">
+  <span class="muted mono">{{ stats.buckets[0].bucket }}</span>
+  <span class="muted mono">{{ stats.buckets[-1].bucket }}</span>
+</div>
+{% endif %}
+
+{% if stats.by_severity %}
+<div class="result-head">
+  {% for severity, count in stats.by_severity.items() %}
+  <span class="level level-{{ severity|lower }}">{{ severity }}</span>
+  <span class="muted">{{ count|number }}</span>
+  {% endfor %}
+</div>
+{% endif %}
+
+{% if page.items %}
+<table class="table">
+  <thead>
+    <tr>
+      <th>When</th><th>Severity</th><th>Type</th><th>Route</th>
+      <th>Status</th><th>Duration</th><th>Service</th><th>Message</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for row in page.items %}
+    <tr class="clickable"
+        hx-get="/partials/log-event/{{ row.event_id }}?app_id={{ app_id }}"
+        hx-target="#drawer"
+        hx-swap="innerHTML">
+      <td class="nowrap mono">{{ row.event_time|short_ts }}</td>
+      <td><span class="level level-{{ row.severity|lower }}">{{ row.severity }}</span></td>
+      <td class="mono">{{ row.event_type }}</td>
+      <td class="mono ellipsis">{{ row.route_template or '—' }}</td>
+      <td class="mono {{ 'err' if row.status_code and row.status_code >= 500 else '' }}">{{ row.status_code or '—' }}</td>
+      <td class="mono">{{ row.duration_ms ~ ' ms' if row.duration_ms is not none else '—' }}</td>
+      <td class="mono dim">{{ row.service_name or '—' }}</td>
+      <td class="ellipsis">{{ row.message or '—' }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+
+<div class="pager">
+  <span class="muted">showing {{ page.items|length }}{% if page.truncated %} of more{% endif %}</span>
+  {% if page.next_cursor %}
+  {# Cursor pagination, not offset: the next page is anchored to the last row of
+     this one, so an event arriving mid-read cannot shift the window. #}
+  <button class="btn ghost"
+          hx-get="/partials/explorer?{{ params|urlencode }}&cursor={{ page.next_cursor }}"
+          hx-target="#explorer-results">Next page</button>
+  {% endif %}
+</div>
+{% else %}
+<p class="empty">No events match these filters.</p>
+{% endif %}
+
+{% endif %}

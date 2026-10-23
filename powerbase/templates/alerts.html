@@ -1,0 +1,67 @@
+{% extends "base.html" %}
+{% block title %}Alerts{% endblock %}
+{% block heading %}Alerts{% endblock %}
+
+{% block content %}
+<form class="toolbar" method="get" action="/alerts">
+  <input type="hidden" name="app_id" value="{{ current_app }}">
+  <label>Window
+    <select name="window_hours" onchange="this.form.submit()">
+      {% for option in [1, 6, 24, 72, 168] %}
+      <option value="{{ option }}" {{ 'selected' if option == window_hours else '' }}>last {{ option }}h</option>
+      {% endfor %}
+    </select>
+  </label>
+</form>
+
+{% if alerts %}
+<div class="kpi-row small">
+  <div class="kpi {{ 'bad' if report.worst == 'critical' else 'warn' }}">
+    <div class="kpi-value">{{ alerts|length }}</div>
+    <div class="kpi-label">Active alerts</div>
+  </div>
+  {% for severity in ['critical', 'warning', 'info'] %}
+  <div class="kpi">
+    <div class="kpi-value">{{ report.to_dict().counts[severity] }}</div>
+    <div class="kpi-label">{{ severity }}</div>
+  </div>
+  {% endfor %}
+</div>
+
+<section class="card">
+  <table class="table">
+    <thead><tr><th>Severity</th><th>Rule</th><th>What</th><th>Value</th><th>Since</th></tr></thead>
+    <tbody>
+      {% for alert in alerts %}
+      <tr>
+        <td><span class="level level-{{ 'error' if alert.severity == 'critical' else ('warn' if alert.severity == 'warning' else 'info') }}">{{ alert.severity }}</span></td>
+        <td class="mono dim">{{ alert.rule }}</td>
+        <td>
+          <strong>{{ alert.title }}</strong>
+          <div class="muted">{{ alert.detail }}</div>
+        </td>
+        <td class="mono num">
+          {% if alert.value is not none %}{{ alert.value }}{% else %}—{% endif %}
+          {% if alert.threshold is not none %}<div class="dim">limit {{ alert.threshold }}</div>{% endif %}
+        </td>
+        <td class="nowrap">{{ alert.since|short_ts }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% else %}
+<section class="card">
+  <p class="empty">
+    Nothing is firing in the last {{ window_hours }}h.
+  </p>
+  <p class="muted">
+    Rules: crash-free rate below {{ thresholds.crash_free_rate_critical|percent }},
+    error-log rate above {{ thresholds.error_rate_critical|percent }}, no telemetry for
+    {{ (thresholds.silent_minutes / 60)|round|int }}h, and failed or stale maintenance jobs.
+    Rules stay quiet below {{ thresholds.min_samples_for_rates }} samples, so a quiet app
+    cannot raise a false alarm.
+  </p>
+</section>
+{% endif %}
+{% endblock %}

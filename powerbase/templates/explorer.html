@@ -1,0 +1,143 @@
+{% extends "base.html" %}
+{% block title %}Log explorer{% endblock %}
+{% block heading %}Log explorer{% endblock %}
+
+{% block content %}
+<form id="filters" class="toolbar"
+      hx-get="/partials/explorer"
+      hx-target="#explorer-results"
+      hx-trigger="load, change, submit, keyup changed delay:350ms from:#q"
+      hx-indicator="#spinner">
+  <input type="hidden" name="app_id" value="{{ current_app }}">
+
+  <label>Severity
+    <select name="severity">
+      <option value="">any</option>
+      {% for option in severities %}
+      <option value="{{ option }}" {{ 'selected' if params.get('severity') == option else '' }}>{{ option }}</option>
+      {% endfor %}
+    </select>
+  </label>
+
+  <label>Source
+    <select name="source">
+      <option value="">any</option>
+      {% for option in sources %}
+      <option value="{{ option }}" {{ 'selected' if params.get('source') == option else '' }}>{{ option }}</option>
+      {% endfor %}
+    </select>
+  </label>
+
+  <label>Service
+    <select name="service_name">
+      <option value="">any</option>
+      {% for option in services %}
+      <option value="{{ option }}" {{ 'selected' if params.get('service_name') == option else '' }}>{{ option }}</option>
+      {% endfor %}
+    </select>
+  </label>
+
+  <label>Environment
+    <select name="environment">
+      <option value="">any</option>
+      {% for option in environments %}
+      <option value="{{ option }}" {{ 'selected' if params.get('environment') == option else '' }}>{{ option }}</option>
+      {% endfor %}
+    </select>
+  </label>
+
+  <label>Route <input type="text" name="route_template" value="{{ params.get('route_template') or '' }}" size="14" placeholder="any"></label>
+  <label>Trace <input type="text" name="trace_id" value="{{ params.get('trace_id') or '' }}" size="14" placeholder="any"></label>
+  <label>Status &ge; <input type="number" name="min_status" value="{{ params.get('min_status') or '' }}" min="100" max="599" size="5" placeholder="any"></label>
+  <label>Search <input type="text" id="q" name="q" value="{{ params.get('q') or '' }}" size="20" placeholder="message, code, fingerprint, route"></label>
+
+  <label>Range
+    <select name="days">
+      {% for option in range_options(params.get('days')) %}
+      <option value="{{ option }}" {{ 'selected' if params.get('days') == option else '' }}>last {{ option }}d</option>
+      {% endfor %}
+    </select>
+  </label>
+
+  <label>Bucket
+    <select name="bucket">
+      {% for option in buckets %}
+      <option value="{{ option }}" {{ 'selected' if params.get('bucket') == option else '' }}>{{ option }}</option>
+      {% endfor %}
+    </select>
+  </label>
+
+  <label>Sort
+    <select name="sort">
+      {% for option in sort_fields %}
+      <option value="{{ option }}" {{ 'selected' if params.get('sort') == option else '' }}>{{ option }}</option>
+      {% endfor %}
+    </select>
+  </label>
+
+  <label>Order
+    <select name="direction">
+      <option value="desc" {{ 'selected' if params.get('direction') == 'desc' else '' }}>newest</option>
+      <option value="asc" {{ 'selected' if params.get('direction') == 'asc' else '' }}>oldest</option>
+    </select>
+  </label>
+
+  <label>Limit
+    <select name="limit">
+      {% for option in [25, 50, 100, 200] %}
+      <option value="{{ option }}" {{ 'selected' if params.get('limit') == option else '' }}>{{ option }}</option>
+      {% endfor %}
+    </select>
+  </label>
+
+  <span id="spinner" class="htmx-indicator spinner"></span>
+</form>
+
+{# Saving and loading are plain form posts, not HTMX: a save should update the
+   saved-search list as well as the results, and a full navigation is the
+   simplest way to guarantee both. #}
+<div class="toolbar">
+  <form method="get" action="/explorer" class="inline">
+    <input type="hidden" name="app_id" value="{{ current_app }}">
+    <label>Saved search
+      <select name="saved" onchange="this.form.submit()">
+        <option value="">— none —</option>
+        {% for item in saved_items %}
+        <option value="{{ item.id }}" {{ 'selected' if saved_id == item.id else '' }}>{{ item.name }}</option>
+        {% endfor %}
+      </select>
+    </label>
+  </form>
+
+  <form method="post" action="/explorer/save" class="inline">
+    {% for key, value in params.items() %}
+    {% if value not in (None, '') %}<input type="hidden" name="{{ key }}" value="{{ value }}">{% endif %}
+    {% endfor %}
+    <label>Save as <input type="text" name="name" size="14" placeholder="name" required></label>
+    <button class="btn ghost" type="submit">Save</button>
+  </form>
+
+  {% if saved_id %}
+  <form method="post" action="/explorer/delete" class="inline">
+    <input type="hidden" name="query_id" value="{{ saved_id }}">
+    <input type="hidden" name="app_id" value="{{ current_app }}">
+    <button class="btn ghost" type="submit">Delete saved</button>
+  </form>
+  {% endif %}
+</div>
+
+{% if flash %}<p class="muted">{{ flash }}</p>{% endif %}
+
+<div id="explorer-results" class="card"></div>
+<div id="drawer" class="drawer" hidden></div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  document.body.addEventListener('htmx:afterSwap', (event) => {
+    if (event.detail.target.id === 'drawer') {
+      event.detail.target.hidden = false;
+    }
+  });
+</script>
+{% endblock %}

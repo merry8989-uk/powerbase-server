@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Not found · Powerbase</title>
+<link rel="stylesheet" href="/static/app.css">
+</head>
+<body class="centered">
+  <div class="login-card">
+    <div class="brand big"><span class="dot"></span> Powerbase</div>
+    <p class="muted">Nothing here.</p>
+    <div class="callout">
+      No <code>{{ what }}</code> in this database.
+      {% if what is defined and what.startswith('session') %}
+      Sessions are pruned once they fall outside the app's retention window.
+      {% endif %}
+    </div>
+    <p><a href="/">Back to the overview</a></p>
+  </div>
+</body>
+</html>

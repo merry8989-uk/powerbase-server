@@ -1,0 +1,45 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install
+        run: pip install -r requirements.txt
+
+      - name: Test suite
+        run: python -m pytest -q
+
+      # A fresh instance end to end: migrate, verify, then prove the rollback
+      # path works. This is the drill that would otherwise be skipped until the
+      # day someone needs it.
+      - name: Bootstrap and verify migrations
+        run: |
+          python scripts/bootstrap.py --app-id com.example.shop --name "Example Shop" --db ci.db
+          python scripts/migrate.py --db ci.db --status
+          python scripts/migrate.py --db ci.db --verify
+          python scripts/migrate.py --db ci.db --drill
+
+      - name: Seed and run a maintenance pass
+        env:
+          POWERBASE_DB: ci.db
+          POWERBASE_BACKUP_DIR: ci-backups
+        run: |
+          python scripts/seed.py --devices 4 --sessions-per-device 2
+          python scripts/maintenance.py --rollup --days 8
+          python scripts/maintenance.py --daily
+          python scripts/maintenance.py --list-backups
+
+      - name: Ingestion load test
+        run: python scripts/loadtest.py --quick
