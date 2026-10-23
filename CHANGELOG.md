@@ -4,6 +4,49 @@ All notable changes to Powerbase. The version lives in `powerbase/version.py`
 and is read from there by the build, by `/healthz`, and by the dashboard — one
 source of truth, so the metadata and the running server cannot disagree.
 
+## 1.8.0
+
+Analytics events and crashes now appear in the Logs Explorer.
+
+### Added
+- **Crashes and analytics events are projected into `log_events`**, so the
+  explorer can finally answer "what happened in this session". Before this they
+  went only into `events` / `logs` / `crashes` and were **invisible to the
+  explorer** — the one screen built for that question. A crash is a diagnostic
+  event; it was the one thing the diagnostics view could not show.
+  - `crash` at `FATAL` when unhandled and `ERROR` when handled, with the crash
+    row's fingerprint reused and the first stack frame carried as an attribute.
+  - `analytics.event` at `INFO`, with the event name as the message, `screen` as
+    `route_template`, and `properties` as attributes.
+  - `analytics.log` at the log's own level, with `tag` and `context` as
+    attributes.
+- `docs/analytics-projection.md` — what it does, and what it costs.
+
+### Design notes
+- **A projection, not a move.** The source table stays the source of truth for
+  its own dashboard page and no client changes. The `log_events` row is written
+  in the **same transaction**, so the two cannot diverge: either both land or
+  neither does.
+- **The cost is stated rather than hidden: each crash and analytics event is now
+  stored twice.** That is the price of a complete explorer without breaking
+  every installed client. Consolidating the two models is a larger change and
+  should be deliberate.
+- **Not a view.** A `UNION ALL` view would avoid the duplication and break the
+  cursor: `log_events` paginates on `(event_time, id)` and ids collide across
+  tables, so a union needs a synthetic key and the keyset cursor stops being
+  exact.
+- The projected `event_id` is derived, not random, so a collision is a bug
+  rather than a coin flip — and the insert is a plain `INSERT`, not
+  `OR IGNORE`, so it fails loudly.
+- Redaction is carried through: the projection uses the writer's already-redacted
+  values, not the raw ones.
+
+### Known limitation
+- Projected rows are tagged `source = android_sdk`, because the analytics
+  endpoints are the mobile SDK's contract. A web client posting to the same
+  endpoints would be mislabelled. Adding a value to the `source` vocabulary is a
+  table rebuild; documented rather than done.
+
 ## 1.7.0
 
 The read path, measured. `scripts/querybench.py` is new and immediately found

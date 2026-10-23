@@ -24,6 +24,7 @@ from .models import (
     DeviceInfo,
     to_iso,
 )
+from . import projection
 from .attributes import sanitize_attributes
 from .redaction import redact_text, redact_value
 
@@ -113,6 +114,46 @@ def _begin_batch(
 
 
 # ------------------------------------------------------------------ writes
+def _insert_projected(conn, app_id: str, values: dict, redact: bool) -> None:
+    """Write the diagnostics-log projection of an analytics row.
+
+    Called inside the source row's own transaction, so the two cannot diverge:
+    either both land or neither does. See `powerbase/projection.py` for why this
+    exists and what it costs.
+
+    A plain INSERT, not `OR IGNORE`. The batch ledger already refuses a replayed
+    batch, so a duplicate `event_id` here would mean something is wrong, and a
+    collision that fails loudly is worth more than one that is swallowed.
+    """
+    conn.execute(
+        """
+        INSERT INTO log_events
+            (event_id, app_id, event_time, received_at, source, severity, event_type,
+             service_name, environment, app_version, platform_version,
+             request_id, trace_id, span_id, route_template, http_method,
+             status_code, duration_ms, error_code, error_fingerprint, message,
+             attributes, redaction_version, sdk_version, category,
+             source_type, source_id)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        """,
+        (
+            values["event_id"], app_id, values["event_time"], utcnow_iso(),
+            values["source"],
+            values["severity"], values["event_type"], values.get("service_name"),
+            values.get("environment"), values.get("app_version"),
+            values.get("platform_version"), values.get("request_id"),
+            values.get("trace_id"), values.get("span_id"),
+            values.get("route_template"), values.get("http_method"),
+            values.get("status_code"), values.get("duration_ms"),
+            values.get("error_code"), values.get("error_fingerprint"),
+            values.get("message"), _json(values.get("attributes") or {}),
+            REDACTION_VERSION if redact else 0, values.get("sdk_version"),
+            values.get("category"), values.get("source_type"),
+            values.get("source_id"),
+        ),
+    )
+
+
 def write_events(db: Database, app_id: str, batch: EventsBatch, redact: bool) -> dict:
     with db.write() as conn:
         if not _begin_batch(conn, batch.batch_id, app_id, "events", len(batch.events)):
@@ -122,7 +163,7 @@ def write_events(db: Database, app_id: str, batch: EventsBatch, redact: bool) ->
             ensure_device(conn, app_id, event.device_id, ts)
             ensure_session(conn, app_id, event.device_id, event.session_id, ts)
             props = redact_value(event.properties) if redact else event.properties
-            conn.execute(
+            cur = conn.execute(
                 """
                 INSERT INTO events
                     (app_id, device_id, session_id, ts, received_at, name, category, screen, properties, sdk_version)
@@ -141,6 +182,15 @@ def write_events(db: Database, app_id: str, batch: EventsBatch, redact: bool) ->
                     event.sdk_version or batch.sdk_version,
                 ),
             )
+            # The explorer should see this too. A product event is not the same
+            # thing as an HTTP request, but it is the same kind of thing.
+            _insert_projected(
+                conn, app_id,
+                projection.from_event(
+                    event, row_id=cur.lastrowid, app_id=app_id, ts=ts, properties=props
+                ),
+                redact,
+            )
         return {"duplicate": False, "accepted": len(batch.events)}
 
 
@@ -155,7 +205,7 @@ def write_logs(db: Database, app_id: str, batch: LogsBatch, redact: bool) -> dic
             message = redact_text(entry.message) if redact else entry.message
             stack = redact_text(entry.stacktrace) if (redact and entry.stacktrace) else entry.stacktrace
             context = redact_value(entry.context) if redact else entry.context
-            conn.execute(
+            cur = conn.execute(
                 """
                 INSERT INTO logs
                     (app_id, device_id, session_id, ts, received_at, level, tag, message, stacktrace, context, sdk_version)
@@ -175,6 +225,14 @@ def write_logs(db: Database, app_id: str, batch: LogsBatch, redact: bool) -> dic
                     entry.sdk_version or batch.sdk_version,
                 ),
             )
+            _insert_projected(
+                conn, app_id,
+                projection.from_log(
+                    entry, row_id=cur.lastrowid, app_id=app_id, ts=ts,
+                    message=message, context=context,
+                ),
+                redact,
+            )
         return {"duplicate": False, "accepted": len(batch.logs)}
 
 
@@ -188,7 +246,8 @@ def write_crashes(db: Database, app_id: str, batch: CrashesBatch, redact: bool) 
             ensure_session(conn, app_id, crash.device_id, crash.session_id, ts)
             message = redact_text(crash.message) if (redact and crash.message) else crash.message
             stack = redact_text(crash.stacktrace) if (redact and crash.stacktrace) else crash.stacktrace
-            conn.execute(
+            crash_fingerprint = fingerprint(crash.kind, message, stack)
+            cur = conn.execute(
                 """
                 INSERT INTO crashes
                     (app_id, device_id, session_id, ts, received_at, kind, message, stacktrace, fingerprint, handled, app_version, os_version)
@@ -203,11 +262,21 @@ def write_crashes(db: Database, app_id: str, batch: CrashesBatch, redact: bool) 
                     crash.kind,
                     message,
                     stack,
-                    fingerprint(crash.kind, message, stack),
+                    crash_fingerprint,
                     1 if crash.handled else 0,
                     crash.app_version,
                     crash.os_version,
                 ),
+            )
+            # A crash is the diagnostic event. Before this it was the one thing
+            # the Logs Explorer could not show.
+            _insert_projected(
+                conn, app_id,
+                projection.from_crash(
+                    crash, row_id=cur.lastrowid, app_id=app_id, ts=ts,
+                    message=message, stacktrace=stack, fingerprint=crash_fingerprint,
+                ),
+                redact,
             )
         return {"duplicate": False, "accepted": len(batch.crashes)}
 
