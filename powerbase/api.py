@@ -18,6 +18,7 @@ from fastapi.responses import JSONResponse
 
 from . import repository as repo
 from .config import Settings
+from . import deployment
 from .db import Database
 from .migrations import run_migrations, utcnow_iso
 from .models import (
@@ -75,6 +76,12 @@ def create_app(settings: Settings | None = None, db: Database | None = None) -> 
 
     @asynccontextmanager
     async def lifespan(application: FastAPI):
+        # Two things in this build are in-process and assume one process. Say so
+        # before starting, rather than letting an operator discover it from
+        # rate limits that do not add up. See `powerbase/deployment.py`.
+        for warning in deployment.warnings_for(settings):
+            logger.warning("deployment: %s", warning)
+
         # The nightly maintenance pass runs on its own thread while the server
         # is up. `scripts/maintenance.py` is the alternative for cron users.
         scheduler = None
@@ -106,6 +113,7 @@ def create_app(settings: Settings | None = None, db: Database | None = None) -> 
     app.state.db = db
     app.state.limiter = limiter
     app.state.verifications = verifications
+    app.state.deployment = deployment.summarise(settings)
 
     # ------------------------------------------------------ access logging
     if settings.access_log:
