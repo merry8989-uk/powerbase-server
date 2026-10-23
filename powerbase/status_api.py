@@ -71,9 +71,16 @@ def instance_summary(db: Database, settings: Settings) -> dict:
     """
     reachable, error = _db_reachable(db)
 
+    from . import deployment
+
     summary: dict = {
         "service": "powerbase",
         "version": __version__,
+        # Whether this instance is the shape it is built for, and what changes if
+        # it is not. Visible here so an operator does not have to find it in the
+        # logs — and because a rate limit that silently multiplies is exactly the
+        # kind of thing that never gets looked at until it matters.
+        "deployment": deployment.summarise(settings),
         "uptime_seconds": round(uptime_seconds(), 1),
         "uptime": human_uptime(),
         "database": {
