@@ -30,7 +30,10 @@ def test_htmx_requests_get_a_redirect_header(seeded_env):
 def test_login_page_renders(seeded_env):
     r = seeded_env.client.get("/login")
     assert r.status_code == 200
-    assert "Admin password" in r.text
+    # The form gained an account field; the admin password is still one of the
+    # two ways in, and the page says which is which.
+    assert "Email" in r.text
+    assert "admin password" in r.text.lower()
 
 
 def test_wrong_password_is_rejected(seeded_env):
