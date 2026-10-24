@@ -17,7 +17,13 @@ import hmac
 import threading
 import time
 
+#: The break-glass cookie, signed with a key derived from the admin password.
 COOKIE_NAME = "pb_session"
+
+#: A user's session token, hashed in `user_sessions`. Separate from the cookie
+#: above because the two carry different things: one proves "the person who
+#: knows the admin password", the other identifies a user and carries their role.
+USER_COOKIE = "pb_user"
 
 
 def derive_secret(admin_password: str) -> str:
