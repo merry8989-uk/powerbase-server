@@ -4,6 +4,48 @@ All notable changes to Powerbase. The version lives in `powerbase/version.py`
 and is read from there by the build, by `/healthz`, and by the dashboard — one
 source of truth, so the metadata and the running server cannot disagree.
 
+## 1.12.0
+
+The explorer histogram reads from the rollup when the rollup can answer it.
+
+### Changed
+- **`log_event_stats` no longer groups `log_events` on every request when it does
+  not have to.** `metrics_daily` already holds the daily counts and the per-severity
+  breakdown, so a day-bucketed histogram with no filters is answered from the
+  rollup, and only the partial days at either end are read raw. The stretches meet
+  exactly on day boundaries and cannot overlap, so nothing is counted twice.
+- `queries.histogram` and `queries.histogram_is_rollup_usable` do the work, next
+  to the `_merged_series` that the dashboard charts have used for a while.
+- The response now carries `source: "rollup" | "raw"`, so it is possible to tell
+  which storage answered without guessing.
+
+### When the rollup is refused, and why each limit is real
+- **An hour bucket** — `metrics_daily` is daily by design.
+- **Any filter, or a free-text search** — the rollup stores totals, not a
+  breakdown by route, service or anything else. Falling back is not a compromise,
+  it is the only correct answer.
+- **An open-ended range** — the merge needs both bounds to find the whole days in
+  the middle.
+
+### The bug the first version had
+`histogram_is_rollup_usable` **documented the filter rule and had no parameter for
+it**, so a filtered histogram came back from the rollup with unfiltered numbers.
+A function whose signature cannot see the thing its docstring reasons about is a
+function that will get it wrong. Caught by a smoke test, then by
+`test_a_filtered_total_is_a_subset_of_the_unfiltered_one`.
+
+### Verified, and not
+- **Verified:** 14 tests in `tests/test_histogram_rollup.py`. The rollup total and
+  the severity breakdown match the raw answer exactly; every day bucket matches
+  the raw hourly buckets folded down; a filtered or searched histogram falls back
+  and returns a proper subset; a range spanning today merges both sources with no
+  double counting.
+- **Not verified:** the **wall-clock benefit**. The point of the change is
+  performance and I could not demonstrate it. Measurement runs gave inconsistent
+  results — the same configuration reported `source: "raw"` in one run and
+  `"rollup"` in another — and I ran out of budget to explain the discrepancy. The
+  mechanism is correct and the work is smaller; the speed-up is unproven.
+
 ## 1.11.0
 
 The console can finally use the roles.
