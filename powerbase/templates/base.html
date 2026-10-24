@@ -25,8 +25,20 @@
         Alerts
         {% if alerts %}<span class="nav-badge {{ 'critical' if alert_report and alert_report.worst == 'critical' else '' }}">{{ alerts|length }}</span>{% endif %}
       </a>
+      {# Hidden rather than shown-then-refused: a link that 403s is worse than no
+         link, and `can` comes from the actor that `render` put in the context. #}
+      {% if can('users:read') %}
+      <a href="/team" class="{{ 'active' if page == 'team' else '' }}">Team</a>
+      {% endif %}
     </nav>
-    <div class="sidebar-foot">v{{ version }}</div>
+    <div class="sidebar-foot">
+      {% if actor %}
+        {# Who you are, and what you are, is the thing you look for first when a
+           button is missing. #}
+        <div class="who">{{ actor.label }} · {{ actor.role }}</div>
+      {% endif %}
+      <div>v{{ version }}</div>
+    </div>
   </aside>
 
   <main>
