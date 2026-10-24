@@ -4,6 +4,47 @@ All notable changes to Powerbase. The version lives in `powerbase/version.py`
 and is read from there by the build, by `/healthz`, and by the dashboard — one
 source of truth, so the metadata and the running server cannot disagree.
 
+## 1.11.0
+
+The console can finally use the roles.
+
+### Fixed
+- **A developer account could not sign in to the console at all.** `powerbase/team.py`
+  built roles, sessions, invites and project membership, and all of it was
+  reachable over the API only — the dashboard still authenticated with the admin
+  password alone. So the feature was real everywhere except the one screen it was
+  meant to govern.
+
+### Added
+- **The console accepts an account.** The login form takes an email and a
+  password; an empty email falls back to the admin password. Two cookies,
+  because they carry different things: `pb_session` proves "the person who knows
+  the admin password" and maps to `owner`, `pb_user` identifies a user and
+  carries their role.
+- **`/team`** — list people with their role, status and last sign-in; create an
+  account; change a role; disable and enable. Creating an account shows the
+  password **once**, because there is no email delivery and this is the only
+  chance to see it.
+- **The console obeys the roles.** The Team link is hidden from a role that
+  cannot see it, and the actions refuse: `users:read` to look, `users:write` to
+  change anything, `users:write_admin` to mint an admin — so an admin cannot
+  quietly create another admin. A link that 403s is worse than no link, which is
+  why it is hidden rather than shown-then-refused.
+- **Who you are is on screen** — the sidebar shows the signed-in identity and
+  role, because that is the first thing you look for when a button is missing.
+- **Logging out revokes the session server-side.** Deleting a cookie tells the
+  browser to forget; the token stayed valid until it expired. That is the
+  difference between logging out and hiding.
+
+### Notes
+- The admin password remains the break-glass route, deliberately: an instance
+  whose only owner account is locked out has to be recoverable from the host, not
+  from a support ticket.
+- `render()` injects the actor and a `can()` helper into every template, so a
+  route cannot forget and a template does not have to be handed the same two
+  things twenty times.
+- 18 tests in `tests/test_console_team.py`.
+
 ## 1.10.0
 
 Multi-worker deployment: the build says what it supports, instead of leaving an
