@@ -20,11 +20,18 @@
       <p class="muted">Sign in to view diagnostics and usage.</p>
       {% if error %}<div class="alert">{{ error }}</div>{% endif %}
       <form method="post" action="/login">
-        <label for="password">Admin password</label>
-        <input type="password" id="password" name="password" autofocus autocomplete="current-password" required>
+        <label for="email">Email <span class="muted">(leave empty for the admin password)</span></label>
+        <input type="email" id="email" name="email" autofocus autocomplete="username"
+               value="{{ email|default('') }}" placeholder="you@example.com">
+        <label for="password">Password</label>
+        <input type="password" id="password" name="password" autocomplete="current-password" required>
         <input type="hidden" name="next" value="{{ next }}">
         <button class="btn primary" type="submit">Sign in</button>
       </form>
+      <p class="muted small">
+        An email signs you in as that account, with its role. An empty email uses the
+        admin password, which is the break-glass route and can do everything.
+      </p>
     {% endif %}
   </div>
 </body>
