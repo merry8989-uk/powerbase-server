@@ -260,6 +260,31 @@ def series(
     return [{"bucket": r["bucket"], "value": r["value"]} for r in rows]
 
 
+def dimension_totals(
+    db: Database, app_id: str, metric: str, since: datetime, until: datetime
+) -> dict[str, float]:
+    """Sums for a metric grouped by its dimension, over a covered range.
+
+    `series` takes one dimension at a time because that is what a chart wants.
+    A severity breakdown wants all of them at once, which is this.
+    """
+    rows = db.query(
+        """
+        SELECT dimension, SUM(value) AS total
+          FROM metrics_daily
+         WHERE app_id = ? AND metric = ? AND dimension != ''
+           AND day >= ? AND day <= ?
+         GROUP BY dimension
+        """,
+        (
+            app_id, metric,
+            since.strftime(DAY_FORMAT),
+            (until - timedelta(days=1)).strftime(DAY_FORMAT),
+        ),
+    )
+    return {row["dimension"]: row["total"] for row in rows}
+
+
 def totals(db: Database, app_id: str, since: datetime, until: datetime) -> dict[str, float]:
     """Summed base metrics over a day-aligned, fully-covered range."""
     rows = db.query(
