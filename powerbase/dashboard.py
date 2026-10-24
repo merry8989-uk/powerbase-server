@@ -23,6 +23,7 @@ from . import alerts as alerts_module
 from . import logquery, saved_queries
 from .models import to_iso
 from . import dashboard_auth as auth
+from . import authz, team
 from . import queries
 from . import rollups
 from .config import Settings
@@ -112,6 +113,15 @@ def register_dashboard_routes(app, db: Database, settings: Settings) -> None:
         one wrapper here means the routes stay readable and a future signature
         change is a one-line edit.
         """
+        # Every page needs to know who is looking, and what they may do. Doing
+        # it here means a route cannot forget, and a template does not have to
+        # be handed the same two things twenty times.
+        actor = getattr(context["request"].state, "actor", None)
+        context.setdefault("actor", actor)
+        context.setdefault(
+            "can",
+            lambda permission: bool(actor) and team.can(actor["role"], permission),
+        )
         return templates.TemplateResponse(
             request=context["request"],
             name=name,
@@ -151,16 +161,60 @@ def register_dashboard_routes(app, db: Database, settings: Settings) -> None:
     def client_key(request: Request) -> str:
         return request.client.host if request.client else "unknown"
 
+    def actor_from(request: Request) -> dict | None:
+        """Who is asking. `None` means nobody.
+
+        Two ways in, and they are not the same thing:
+
+        * the **admin password** cookie — break-glass, and it maps to `owner`
+          because the person who holds it can do anything anyway. Saying
+          otherwise would be a lie the UI tells itself.
+        * a **user session** — a real account, with a real role, which is what
+          makes the roles built in `powerbase/team.py` usable here at all.
+        """
+        if not settings.dashboard_enabled:
+            return None
+        secret = auth.derive_secret(settings.admin_password or "")
+        if auth.verify_cookie(secret, request.cookies.get(auth.COOKIE_NAME)):
+            return {
+                "kind": "admin", "role": "owner", "email": None, "user_id": None,
+                "label": "admin password", "break_glass": True,
+            }
+        token = request.cookies.get(auth.USER_COOKIE)
+        if token:
+            user = team.verify_session(db, token)
+            if user is not None:
+                return {
+                    "kind": "user", "role": user["role"], "email": user["email"],
+                    "user_id": user["id"], "label": user["email"],
+                    "break_glass": False,
+                }
+        return None
+
     def require_admin(request: Request) -> bool:
         if not settings.dashboard_enabled:
             raise HTMLResponse_503()
-        secret = auth.derive_secret(settings.admin_password or "")
-        if auth.verify_cookie(secret, request.cookies.get(auth.COOKIE_NAME)):
-            return True
-        headers = {"Location": "/login"}
-        if request.headers.get("HX-Request") == "true":
-            headers = {"HX-Redirect": "/login"}
-        raise HTMLRedirect(headers)
+        actor = actor_from(request)
+        if actor is None:
+            headers = {"Location": "/login"}
+            if request.headers.get("HX-Request") == "true":
+                headers = {"HX-Redirect": "/login"}
+            raise HTMLRedirect(headers)
+        # Stashed on the request so `render` can put it in every template, and so
+        # a route that cares about the role can read it without a second
+        # dependency.
+        request.state.actor = actor
+        return True
+
+    def require_permission(request: Request, permission: str) -> dict:
+        """Refuse a console action the actor's role does not hold."""
+        actor = request.state.actor
+        if not team.can(actor["role"], permission):
+            raise HTMLRedirect(
+                {"HX-Redirect": "/team?error=denied"} if request.headers.get("HX-Request") == "true"
+                else {"Location": "/team?error=denied"}
+            )
+        return actor
 
     def guard(app_id: str | None) -> str:
         resolved = selected_app(app_id)
@@ -486,7 +540,19 @@ def register_dashboard_routes(app, db: Database, settings: Settings) -> None:
         )
 
     @app.post("/login", include_in_schema=False)
-    def login_submit(request: Request, password: str = Form(...), next: str = Form("/")):
+    def login_submit(
+        request: Request,
+        password: str = Form(...),
+        email: str = Form(""),
+        next: str = Form("/"),
+    ):
+        """Two ways in, and the form says which by whether an email was given.
+
+        An email means a real account and a real role. An empty email means the
+        admin password, which is the break-glass route — and the reason it is
+        still here is that an instance whose only owner account is locked out
+        must be recoverable from the host, not from a support ticket.
+        """
         if not settings.dashboard_enabled:
             return render(
                 "login.html",
@@ -507,6 +573,39 @@ def register_dashboard_routes(app, db: Database, settings: Settings) -> None:
                 headers={"Retry-After": str(retry)},
             )
 
+        target = next if next.startswith("/") else "/"
+        wants_account = bool(email.strip())
+
+        if wants_account:
+            try:
+                session = team.login(
+                    db, settings,
+                    email=email.strip(),
+                    password=password,
+                    user_agent=request.headers.get("user-agent"),
+                )
+            except team.TeamError as exc:
+                throttle.record_failure(key)
+                return render(
+                    "login.html",
+                    {
+                        "request": request, "disabled": False, "next": next,
+                        "email": email.strip(), "error": str(exc),
+                    },
+                    status_code=authz.status_for(exc),
+                )
+            throttle.record_success(key)
+            response = RedirectResponse(url=target, status_code=303)
+            response.set_cookie(
+                auth.USER_COOKIE,
+                session["token"],
+                max_age=settings.session_ttl_seconds,
+                httponly=True,
+                samesite="lax",
+                path="/",
+            )
+            return response
+
         if not auth.check_password(settings.admin_password or "", password):
             throttle.record_failure(key)
             return render(
@@ -517,7 +616,7 @@ def register_dashboard_routes(app, db: Database, settings: Settings) -> None:
 
         throttle.record_success(key)
         secret = auth.derive_secret(settings.admin_password or "")
-        response = RedirectResponse(url=next if next.startswith("/") else "/", status_code=303)
+        response = RedirectResponse(url=target, status_code=303)
         response.set_cookie(
             auth.COOKIE_NAME,
             auth.issue_cookie(secret, settings.session_ttl_seconds),
@@ -528,10 +627,108 @@ def register_dashboard_routes(app, db: Database, settings: Settings) -> None:
         )
         return response
 
+    # ------------------------------------------------------------------ team
+    # The console's half of what `powerbase/team.py` already does over the API.
+    # Without this the roles are real but unusable: a developer account could not
+    # sign in to the one screen the roles are meant to govern.
+    @app.get("/team", response_class=HTMLResponse, include_in_schema=False)
+    def team_page(
+        request: Request,
+        _: bool = Depends(require_admin),
+        error: str | None = None,
+        notice: str | None = None,
+        new_password: str | None = None,
+    ):
+        actor = request.state.actor
+        denied = not team.can(actor["role"], "users:read")
+        return render(
+            "team.html",
+            {
+                "request": request, "page": "team", "denied": denied,
+                "users": [] if denied else team.list_users(db),
+                "invites": [] if denied else team.list_invites(db, pending_only=True),
+                "roles": team.ROLES,
+                "assignable": ["admin", "developer", "readonly"],
+                "actor_email": actor["email"],
+                "error": error, "notice": notice, "new_password": new_password,
+                "current_app": None,
+            },
+            status_code=403 if denied else 200,
+        )
+
+    @app.post("/team/users", include_in_schema=False)
+    def team_create_user(
+        request: Request,
+        _: bool = Depends(require_admin),
+        email: str = Form(...),
+        role: str = Form(...),
+        display_name: str = Form(""),
+        password: str = Form(...),
+    ):
+        actor = require_permission(request, "users:write")
+        # Minting an admin is an owner's decision, not an admin's.
+        if role == "admin" and not team.can(actor["role"], "users:write_admin"):
+            raise HTMLRedirect({"Location": "/team?error=only+an+owner+may+create+an+admin"})
+        who = actor["email"] or "admin-password"
+        try:
+            team.create_user(
+                db, email=email, role=role, display_name=display_name or None,
+                password=password, actor=who,
+            )
+        except team.TeamError as exc:
+            raise HTMLRedirect({"Location": f"/team?error={str(exc).replace(' ', '+')}"})
+        # The password is echoed back once so the operator can copy it. There is
+        # no email delivery, so this is the only chance to see it.
+        raise HTMLRedirect({"Location": f"/team?notice=created&new_password={password}"})
+
+    @app.post("/team/users/{user_id}/role", include_in_schema=False)
+    def team_set_role(
+        request: Request,
+        user_id: str,
+        _: bool = Depends(require_admin),
+        role: str = Form(...),
+    ):
+        actor = require_permission(request, "users:write")
+        if role == "admin" and not team.can(actor["role"], "users:write_admin"):
+            raise HTMLRedirect({"Location": "/team?error=only+an+owner+may+promote+to+admin"})
+        try:
+            team.set_role(db, user_id, role, actor=actor["email"] or "admin-password")
+        except team.TeamError as exc:
+            raise HTMLRedirect({"Location": f"/team?error={str(exc).replace(' ', '+')}"})
+        raise HTMLRedirect({"Location": "/team?notice=role+changed"})
+
+    @app.post("/team/users/{user_id}/{action}", include_in_schema=False)
+    def team_toggle(
+        request: Request,
+        user_id: str,
+        action: str,
+        _: bool = Depends(require_admin),
+    ):
+        actor = require_permission(request, "users:write")
+        if action not in ("disable", "enable"):
+            raise HTMLRedirect({"Location": "/team?error=unknown+action"})
+        who = actor["email"] or "admin-password"
+        try:
+            if action == "disable":
+                team.disable(db, user_id, actor=who)
+            else:
+                team.enable(db, user_id, actor=who)
+        except team.TeamError as exc:
+            raise HTMLRedirect({"Location": f"/team?error={str(exc).replace(' ', '+')}"})
+        raise HTMLRedirect({"Location": f"/team?notice={action}d"})
+
     @app.get("/logout", include_in_schema=False)
-    def logout():
+    def logout(request: Request):
+        # Revoke the server-side session too, not just the cookie. Deleting a
+        # cookie only tells this browser to forget; the token stays valid until
+        # it expires unless it is revoked, which is the difference between
+        # logging out and hiding.
+        token = request.cookies.get(auth.USER_COOKIE)
+        if token:
+            team.logout(db, token)
         response = RedirectResponse(url="/login", status_code=303)
         response.delete_cookie(auth.COOKIE_NAME, path="/")
+        response.delete_cookie(auth.USER_COOKIE, path="/")
         return response
 
     # ------------------------------------------------------------ overview
