@@ -256,8 +256,13 @@ say "registering project '$APP_ID'"
 if [ "$DRY_RUN" = 1 ]; then
   info "+ $PREFIX/scripts/bootstrap.py --app-id $APP_ID --name $APP_NAME --platform $PLATFORM"
 else
+  set -a
+  # The directive must sit immediately above the `source` it suppresses. It was
+  # originally above a one-line `set -a; . file; set +a`, where it suppressed
+  # nothing — which is a finding the shellcheck job surfaced.
   # shellcheck disable=SC1091
-  set -a; . "$CONF/powerbase.env"; set +a
+  . "$CONF/powerbase.env"
+  set +a
   BOOTSTRAP_OUT="$("$PREFIX/.venv/bin/python" "$PREFIX/scripts/bootstrap.py" \
     --app-id "$APP_ID" --name "$APP_NAME" --platform "$PLATFORM")"
   printf '%s\n' "$BOOTSTRAP_OUT"
