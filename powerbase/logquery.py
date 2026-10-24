@@ -23,6 +23,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
+from . import queries
 from .db import Database, QueryTimeout
 from .models import to_iso
 
@@ -439,6 +440,16 @@ def query_log_events(
     )
 
 
+def _iso_to_datetime(value: str) -> datetime | None:
+    """The timestamps in this module are strings; the rollup path wants real ones."""
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
 def log_event_stats(
     db: Database,
     *,
@@ -460,6 +471,32 @@ def log_event_stats(
     )
 
     started = time.monotonic()
+
+    # The rollup already holds this answer for whole days. Use it when it can
+    # answer — which is only for a day bucket, with no filters and no free-text
+    # search, because `metrics_daily` stores totals and not a breakdown. See
+    # `queries.histogram_is_rollup_usable` for why each limit is real.
+    if queries.histogram_is_rollup_usable(
+        db, app_id,
+        bucket=bucket,
+        since=_iso_to_datetime(since) if since else None,
+        until=_iso_to_datetime(until) if until else None,
+        filters=filters,
+        q=q,
+    ):
+        merged = queries.histogram(
+            db, app_id, since=_iso_to_datetime(since), until=_iso_to_datetime(until)
+        )
+        elapsed_ms = int((time.monotonic() - started) * 1000)
+        return {
+            "bucket": bucket,
+            "buckets": merged["buckets"],
+            "by_severity": merged["by_severity"],
+            "total": sum(item["count"] for item in merged["buckets"]),
+            "elapsed_ms": elapsed_ms,
+            "source": merged["source"],
+        }
+
     try:
         rows = db.query_timed(
             f"""
@@ -501,6 +538,10 @@ def log_event_stats(
         "by_severity": {row["severity"]: row["count"] for row in severity_rows},
         "total": sum(item["count"] for item in buckets),
         "elapsed_ms": elapsed_ms,
+        # Said out loud, so a user can tell why a wide day-range is instant and
+        # an hourly one is not — and so a wrong number has somewhere to be
+        # traced to.
+        "source": "raw",
     }
 
 
