@@ -551,6 +551,109 @@ def _merged_series(
     return [{"bucket": key, "value": points[key]} for key in sorted(points)]
 
 
+def histogram(
+    db: Database, app_id: str, *, since: datetime, until: datetime
+) -> dict:
+    """Volume over time and a severity breakdown, at the day grain.
+
+    The Logs Explorer used to compute this by grouping `log_events` on every
+    request, which is a scan of the whole filtered range — the most expensive
+    thing the console does, and it gets worse with every row ingested.
+
+    `metrics_daily` already holds the answer, per day, for `log_events` and
+    `log_events_errors` and per severity. So the whole days come from the rollup
+    and only the partial days at either end are read raw. The three stretches
+    meet exactly on day boundaries and cannot overlap, so nothing is counted
+    twice.
+
+    Day grain only. `metrics_daily` is daily by design, and an hour bucket has no
+    rollup equivalent — see `histogram_is_rollup_usable`.
+    """
+    middle_start = max(_day_ceil(since), since)
+    middle_end = min(_day_floor(until), until)
+
+    counts: dict[str, int] = {}
+    errors: dict[str, int] = {}
+    severity: dict[str, int] = {}
+
+    def add_raw(start: datetime, end: datetime) -> None:
+        for row in db.query(
+            """
+            SELECT substr(event_time, 1, 10) AS bucket,
+                   COUNT(*) AS count,
+                   SUM(CASE WHEN severity IN ('ERROR', 'FATAL') THEN 1 ELSE 0 END) AS errors
+              FROM log_events
+             WHERE app_id = ? AND event_time >= ? AND event_time < ?
+             GROUP BY bucket
+            """,
+            (app_id, to_iso(start), to_iso(end)),
+        ):
+            counts[row["bucket"]] = counts.get(row["bucket"], 0) + row["count"]
+            errors[row["bucket"]] = errors.get(row["bucket"], 0) + (row["errors"] or 0)
+        for row in db.query(
+            "SELECT severity, COUNT(*) AS count FROM log_events "
+            "WHERE app_id = ? AND event_time >= ? AND event_time < ? GROUP BY severity",
+            (app_id, to_iso(start), to_iso(end)),
+        ):
+            severity[row["severity"]] = severity.get(row["severity"], 0) + row["count"]
+
+    used_rollup = False
+    if middle_start > since:
+        add_raw(since, middle_start)
+    if middle_start < middle_end:
+        used_rollup = True
+        for metric, target in (("log_events", counts), ("log_events_errors", errors)):
+            for point in rollups.series(db, app_id, metric, since=middle_start, until=middle_end):
+                target[point["bucket"]] = target.get(point["bucket"], 0) + int(point["value"])
+        for name, total in rollups.dimension_totals(
+            db, app_id, "log_events_by_severity", middle_start, middle_end
+        ).items():
+            severity[name] = severity.get(name, 0) + int(total)
+    if middle_end < until:
+        add_raw(middle_end, until)
+
+    return {
+        "buckets": [
+            {"bucket": key, "count": counts[key], "errors": errors.get(key, 0)}
+            for key in sorted(counts)
+        ],
+        "by_severity": severity,
+        "source": "rollup" if used_rollup else "raw",
+    }
+
+
+def histogram_is_rollup_usable(
+    db: Database,
+    app_id: str,
+    *,
+    bucket: str,
+    since: datetime | None,
+    until: datetime | None,
+    filters: list | None = None,
+    q: str | None = None,
+) -> bool:
+    """Whether the rollup can answer this histogram at all.
+
+    Three things disqualify it, and each is a real limit rather than caution:
+
+    * **an hour bucket** — `metrics_daily` is daily by design.
+    * **any filter, or a free-text search** — the rollup holds totals, not a
+      breakdown by route, service or anything else, so a filtered histogram
+      cannot come from it. Falling back is not a compromise; it is the only
+      correct answer.
+    * **an open-ended range** — the merge needs both bounds to find the whole
+      days in the middle.
+    """
+    # The first version of this function documented the filter rule and had no
+    # parameter for it, so a filtered histogram came back from the rollup with
+    # unfiltered numbers. The signature has to be able to see them.
+    if filters or (q and q.strip()):
+        return False
+    if bucket != "day" or since is None or until is None:
+        return False
+    return _rollup_usable(db, app_id, since, until)
+
+
 def timeseries(
     db: Database,
     app_id: str,
