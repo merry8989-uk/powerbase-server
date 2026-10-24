@@ -189,6 +189,9 @@ jobs:
       - name: The unit file is valid to systemd
         run: |
           set -e
+          # The unit names this user. Without it systemd-analyze has something to
+          # complain about that has nothing to do with the unit being wrong.
+          sudo useradd --system --home /tmp --shell /usr/sbin/nologin powerbase || true
           # ExecStart and the paths point at the real filesystem, which does not
           # exist on a runner. Rewriting them to something that does lets
           # systemd-analyze check the syntax and every hardening directive,
