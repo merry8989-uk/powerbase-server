@@ -1,0 +1,142 @@
+{% extends "base.html" %}
+{% block title %}Team{% endblock %}
+{% block heading %}Team{% endblock %}
+
+{% block content %}
+{% if denied %}
+  <div class="callout">
+    Your role (<strong>{{ actor.role }}</strong>) cannot see the team. Ask an owner or an
+    admin if you need access.
+  </div>
+{% else %}
+
+{% if error %}<div class="alert">{{ error|replace('+', ' ') }}</div>{% endif %}
+{% if notice %}<div class="notice">{{ notice|replace('+', ' ') }}</div>{% endif %}
+
+{% if new_password %}
+  <div class="callout">
+    <strong>Password, shown once.</strong> There is no email delivery, so this is the
+    only time it can be shown. Copy it now.
+    <pre class="code">{{ new_password }}</pre>
+  </div>
+{% endif %}
+
+<div class="panel">
+  <h2>People</h2>
+  <table class="grid">
+    <thead>
+      <tr>
+        <th>Email</th><th>Role</th><th>Status</th><th>Last sign-in</th>
+        {% if can('users:write') %}<th></th>{% endif %}
+      </tr>
+    </thead>
+    <tbody>
+      {% for user in users %}
+      <tr>
+        <td>
+          {{ user.email }}
+          {% if user.email == actor_email %}<span class="muted">· you</span>{% endif %}
+        </td>
+        <td>
+          {% if can('users:write') and user.email != actor_email %}
+            <form method="post" action="/team/users/{{ user.id }}/role" class="inline">
+              <select name="role" onchange="this.form.submit()" aria-label="Role for {{ user.email }}">
+                {# Only an owner may mint an admin, so the option is hidden from
+                   an admin rather than offered and then refused. #}
+                {% for role in roles %}
+                  {% if role != 'owner' or user.role == 'owner' %}
+                    {% if role != 'admin' or can('users:write_admin') or user.role == 'admin' %}
+                      <option value="{{ role }}" {{ 'selected' if role == user.role else '' }}>{{ role }}</option>
+                    {% endif %}
+                  {% endif %}
+                {% endfor %}
+              </select>
+            </form>
+          {% else %}
+            <span class="pill">{{ user.role }}</span>
+          {% endif %}
+        </td>
+        <td><span class="pill {{ 'bad' if user.status != 'active' else '' }}">{{ user.status }}</span></td>
+        <td class="muted">{{ user.last_login_at or 'never' }}</td>
+        {% if can('users:write') %}
+        <td>
+          {% if user.email != actor_email %}
+            <form method="post" action="/team/users/{{ user.id }}/{{ 'enable' if user.status != 'active' else 'disable' }}" class="inline">
+              <button class="btn ghost small" type="submit">
+                {{ 'Enable' if user.status != 'active' else 'Disable' }}
+              </button>
+            </form>
+          {% endif %}
+        </td>
+        {% endif %}
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+{% if can('users:write') %}
+<div class="panel">
+  <h2>Add someone</h2>
+  <form method="post" action="/team/users" class="stack">
+    <label>Email
+      <input type="email" name="email" required autocomplete="off" placeholder="teammate@example.com">
+    </label>
+    <label>Display name <span class="muted">(optional)</span>
+      <input type="text" name="display_name" autocomplete="off">
+    </label>
+    <label>Role
+      <select name="role">
+        <option value="readonly">readonly — can look, cannot change</option>
+        <option value="developer" selected>developer — read, export, acknowledge alerts</option>
+        {% if can('users:write_admin') %}
+        <option value="admin">admin — everything except managing owners</option>
+        {% endif %}
+      </select>
+    </label>
+    <label>Password <span class="muted">(at least 12 characters)</span>
+      <input type="text" name="password" required minlength="12" autocomplete="off">
+    </label>
+    <button class="btn primary" type="submit">Create the account</button>
+  </form>
+  <p class="muted">
+    There is no email delivery, so the account is created with a password you choose
+    and it is shown once afterwards. An invite link — the other way in — is available
+    over the API and the CLI.
+  </p>
+</div>
+{% endif %}
+
+{% if invites %}
+<div class="panel">
+  <h2>Pending invites</h2>
+  <table class="grid">
+    <thead><tr><th>Email</th><th>Role</th><th>Expires</th></tr></thead>
+    <tbody>
+      {% for invite in invites %}
+      <tr>
+        <td>{{ invite.email }}</td>
+        <td><span class="pill">{{ invite.role }}</span></td>
+        <td class="muted">{{ invite.expires_at }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+
+<div class="panel">
+  <h2>What the roles mean</h2>
+  <table class="grid">
+    <thead><tr><th>Role</th><th>Can</th></tr></thead>
+    <tbody>
+      <tr><td><span class="pill">owner</span></td><td>Everything, including managing owners.</td></tr>
+      <tr><td><span class="pill">admin</span></td><td>Everything except managing owners: users, keys, alerts, settings, exports.</td></tr>
+      <tr><td><span class="pill">developer</span></td><td>Read, export, and acknowledge alerts. No user or key management.</td></tr>
+      <tr><td><span class="pill">readonly</span></td><td>Read only.</td></tr>
+    </tbody>
+  </table>
+</div>
+
+{% endif %}
+{% endblock %}
