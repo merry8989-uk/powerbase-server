@@ -48,13 +48,9 @@ def _short_ts(value: str | None) -> str:
     """'2026-10-22T09:13:58.221000Z' -> '22 Oct 09:13'"""
     if not value or len(value) < 16:
         return value or ""
-    months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
-              "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
     try:
-        day = value[8:10]
-        month = months[int(value[5:7]) - 1]
-        return f"{day} {month} {value[11:16]}"
-    except (ValueError, IndexError):
+        return datetime.fromisoformat(value).strftime("%d %b %H:%M")
+    except ValueError:
         return value
 
 
